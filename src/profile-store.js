@@ -1,0 +1,216 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+function readJSON(file, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJSON(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+
+const DEFAULT_SETTINGS = {
+  homepage: 'woowil://newtab',
+  searchEngine: 'duckduckgo',
+  theme: 'dark',
+  adBlock: true,
+  restoreSession: false,
+};
+const MAX_DOWNLOAD_ENTRIES = 200;
+const MAX_HISTORY_ENTRIES = 2000;
+const SCRYPT_KEY_LENGTH = 64;
+
+// Local (non-syncing) profiles: each gets its own settings/history/bookmarks
+// JSON files, and (via the partition string callers derive from a profile's
+// id) its own cookies/localStorage/cache.
+class ProfileStore {
+  constructor(userDataDir) {
+    this.root = userDataDir;
+    this.indexFile = path.join(this.root, 'profiles.json');
+    this.index = readJSON(this.indexFile, null);
+    if (!this.index || !Array.isArray(this.index.profiles) || this.index.profiles.length === 0) {
+      const id = crypto.randomUUID();
+      this.index = {
+        activeProfileId: id,
+        profiles: [{ id, name: 'Standard', createdAt: Date.now() }],
+      };
+      writeJSON(this.indexFile, this.index);
+    }
+  }
+
+  listProfiles() {
+    return this.index.profiles;
+  }
+
+  getActiveProfileId() {
+    return this.index.activeProfileId;
+  }
+
+  setActiveProfileId(id) {
+    this.index.activeProfileId = id;
+    writeJSON(this.indexFile, this.index);
+  }
+
+  createProfile(name) {
+    const id = crypto.randomUUID();
+    this.index.profiles.push({ id, name, createdAt: Date.now() });
+    writeJSON(this.indexFile, this.index);
+    return id;
+  }
+
+  findProfile(id) {
+    return this.index.profiles.find((profile) => profile.id === id);
+  }
+
+  hasPassword(id) {
+    const profile = this.findProfile(id);
+    return Boolean(profile && profile.passwordHash);
+  }
+
+  setPassword(id, password) {
+    const profile = this.findProfile(id);
+    if (!profile) {
+      return;
+    }
+    const salt = crypto.randomBytes(16).toString('hex');
+    profile.passwordSalt = salt;
+    profile.passwordHash = crypto.scryptSync(password, salt, SCRYPT_KEY_LENGTH).toString('hex');
+    writeJSON(this.indexFile, this.index);
+  }
+
+  verifyPassword(id, password) {
+    const profile = this.findProfile(id);
+    if (!profile || !profile.passwordHash) {
+      return true;
+    }
+    const candidate = crypto.scryptSync(password, profile.passwordSalt, SCRYPT_KEY_LENGTH);
+    const stored = Buffer.from(profile.passwordHash, 'hex');
+    return candidate.length === stored.length && crypto.timingSafeEqual(candidate, stored);
+  }
+
+  // Refuses to remove the last remaining profile; callers are responsible
+  // for not removing the currently active one.
+  removeProfile(id) {
+    if (this.index.profiles.length <= 1) {
+      return false;
+    }
+    const index = this.index.profiles.findIndex((profile) => profile.id === id);
+    if (index === -1) {
+      return false;
+    }
+    this.index.profiles.splice(index, 1);
+    writeJSON(this.indexFile, this.index);
+    fs.rmSync(this.profileDir(id), { recursive: true, force: true });
+    return true;
+  }
+
+  profileDir(id) {
+    return path.join(this.root, 'profiles', id);
+  }
+
+  getSettings(id) {
+    return { ...DEFAULT_SETTINGS, ...readJSON(path.join(this.profileDir(id), 'settings.json'), {}) };
+  }
+
+  setSetting(id, key, value) {
+    const settings = this.getSettings(id);
+    settings[key] = value;
+    writeJSON(path.join(this.profileDir(id), 'settings.json'), settings);
+    return settings;
+  }
+
+  getHistory(id) {
+    return readJSON(path.join(this.profileDir(id), 'history.json'), []);
+  }
+
+  addHistoryEntry(id, entry) {
+    const history = this.getHistory(id);
+    history.unshift({ ...entry, visitedAt: Date.now() });
+    history.length = Math.min(history.length, MAX_HISTORY_ENTRIES);
+    writeJSON(path.join(this.profileDir(id), 'history.json'), history);
+    return history;
+  }
+
+  clearHistory(id) {
+    writeJSON(path.join(this.profileDir(id), 'history.json'), []);
+    return [];
+  }
+
+  deleteHistoryEntry(id, index) {
+    const history = this.getHistory(id);
+    history.splice(index, 1);
+    writeJSON(path.join(this.profileDir(id), 'history.json'), history);
+    return history;
+  }
+
+  getBookmarks(id) {
+    return readJSON(path.join(this.profileDir(id), 'bookmarks.json'), []);
+  }
+
+  isBookmarked(id, url) {
+    return this.getBookmarks(id).some((bookmark) => bookmark.url === url);
+  }
+
+  // Returns the new bookmarked state (true if just added, false if just
+  // removed).
+  toggleBookmark(id, url, title) {
+    const bookmarks = this.getBookmarks(id);
+    const index = bookmarks.findIndex((bookmark) => bookmark.url === url);
+    let isBookmarked;
+    if (index === -1) {
+      bookmarks.unshift({ id: crypto.randomUUID(), url, title: title || url, addedAt: Date.now() });
+      isBookmarked = true;
+    } else {
+      bookmarks.splice(index, 1);
+      isBookmarked = false;
+    }
+    writeJSON(path.join(this.profileDir(id), 'bookmarks.json'), bookmarks);
+    return isBookmarked;
+  }
+
+  removeBookmark(id, bookmarkId) {
+    const bookmarks = this.getBookmarks(id).filter((bookmark) => bookmark.id !== bookmarkId);
+    writeJSON(path.join(this.profileDir(id), 'bookmarks.json'), bookmarks);
+    return bookmarks;
+  }
+
+  getDownloads(id) {
+    return readJSON(path.join(this.profileDir(id), 'downloads.json'), []);
+  }
+
+  // Called once a download finishes (completed/cancelled/interrupted); an
+  // in-progress DownloadItem can't be resumed across an app restart anyway,
+  // so there's nothing useful to persist before that.
+  addDownload(id, entry) {
+    const downloads = this.getDownloads(id);
+    downloads.unshift(entry);
+    downloads.length = Math.min(downloads.length, MAX_DOWNLOAD_ENTRIES);
+    writeJSON(path.join(this.profileDir(id), 'downloads.json'), downloads);
+    return downloads;
+  }
+
+  removeDownload(id, downloadId) {
+    const downloads = this.getDownloads(id).filter((download) => download.id !== downloadId);
+    writeJSON(path.join(this.profileDir(id), 'downloads.json'), downloads);
+    return downloads;
+  }
+
+  // Workspaces (name + order) are always persisted; the per-workspace tab
+  // URLs inside are only actually reopened at startup when the "restore
+  // session" setting is on — see loadWorkspacesAndOpenTabs in main.js.
+  getWorkspaceState(id) {
+    return readJSON(path.join(this.profileDir(id), 'workspaces.json'), {});
+  }
+
+  setWorkspaceState(id, state) {
+    writeJSON(path.join(this.profileDir(id), 'workspaces.json'), state);
+  }
+}
+
+module.exports = { ProfileStore };

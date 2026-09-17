@@ -1,0 +1,58 @@
+{
+  "name": "woowil",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Woowil - a minimal custom browser built on Electron.",
+  "author": "Trimlon",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:linux": "electron-builder --linux AppImage",
+    "build:win": "electron-builder --win portable",
+    "build:win-installer": "electron-builder --win nsis",
+    "build:all": "electron-builder --linux AppImage --win portable",
+    "publish:linux": "electron-builder --linux AppImage --publish always"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "dk.woowil.app",
+    "productName": "Woowil",
+    "directories": {
+      "output": "dist"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Trimlon",
+      "repo": "woowil-browser",
+      "private": true
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Network"
+    },
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

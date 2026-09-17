@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <title>Historik</title>
+    <style>
+      :root {
+        --bg: #f7f7fb;
+        --bg-elevated: #ffffff;
+        --text: #1b1b1f;
+        --text-secondary: #55525f;
+        --border: #ddd9e6;
+        --accent: #d6299e;
+      }
+      :root[data-theme='dark'] {
+        --bg: #14121b;
+        --bg-elevated: #1e1b29;
+        --text: #f2eefc;
+        --text-secondary: #b8b0cc;
+        --border: #34304a;
+        --accent: #ff3cac;
+      }
+
+      body {
+        font-family: sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        max-width: 720px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        transition: background 0.2s, color 0.2s;
+      }
+      h1 {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 1.4rem;
+      }
+      button {
+        cursor: pointer;
+      }
+      #clear {
+        background: var(--bg-elevated);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 6px 10px;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+      }
+      li {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      li a {
+        color: var(--text);
+        text-decoration: none;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      li a:hover {
+        color: var(--accent);
+        text-decoration: underline;
+      }
+      .time {
+        color: var(--text-secondary);
+        font-size: 12px;
+        flex-shrink: 0;
+      }
+      .empty {
+        color: var(--text-secondary);
+      }
+      .remove {
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        flex-shrink: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Historik <button id="clear">Ryd historik</button></h1>
+    <ul id="list"></ul>
+
+    <script>
+      const list = document.getElementById('list');
+      const clearButton = document.getElementById('clear');
+
+      function render(history) {
+        list.innerHTML = '';
+        if (history.length === 0) {
+          list.innerHTML = '<p class="empty">Ingen historik endnu.</p>';
+          return;
+        }
+        history.forEach((entry, index) => {
+          const li = document.createElement('li');
+
+          const link = document.createElement('a');
+          link.href = entry.url;
+          link.textContent = entry.title || entry.url;
+          li.appendChild(link);
+
+          const time = document.createElement('span');
+          time.className = 'time';
+          time.textContent = new Date(entry.visitedAt).toLocaleString('da-DK');
+          li.appendChild(time);
+
+          const remove = document.createElement('button');
+          remove.className = 'remove';
+          remove.textContent = '×';
+          remove.addEventListener('click', () => {
+            window.woowilPages.deleteHistoryEntry(index).then(render);
+          });
+          li.appendChild(remove);
+
+          list.appendChild(li);
+        });
+      }
+
+      window.woowilPages.getHistory().then(render);
+      window.woowilPages.getSettings().then((settings) => {
+        document.documentElement.dataset.theme = settings.theme;
+      });
+      window.woowilPages.onThemeChange((theme) => {
+        document.documentElement.dataset.theme = theme;
+      });
+      clearButton.addEventListener('click', () => {
+        window.woowilPages.clearHistory().then(render);
+      });
+    </script>
+  </body>
+</html>

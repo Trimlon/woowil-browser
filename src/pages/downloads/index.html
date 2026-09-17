@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <title>Downloads</title>
+    <style>
+      :root {
+        --bg: #f7f7fb;
+        --bg-elevated: #ffffff;
+        --text: #1b1b1f;
+        --text-secondary: #55525f;
+        --border: #ddd9e6;
+        --accent: #d6299e;
+        --track: #e7e4f0;
+      }
+      :root[data-theme='dark'] {
+        --bg: #14121b;
+        --bg-elevated: #1e1b29;
+        --text: #f2eefc;
+        --text-secondary: #b8b0cc;
+        --border: #34304a;
+        --accent: #ff3cac;
+        --track: #2a2540;
+      }
+
+      body {
+        font-family: sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        max-width: 720px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        transition: background 0.2s, color 0.2s;
+      }
+      h1 {
+        font-size: 1.4rem;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+      }
+      li {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .filename {
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .meta {
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+      .progress {
+        height: 4px;
+        border-radius: 2px;
+        background: var(--track);
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        background: var(--accent);
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+      .actions button {
+        cursor: pointer;
+        background: var(--bg-elevated);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+      .empty {
+        color: var(--text-secondary);
+      }
+      .state-cancelled,
+      .state-interrupted {
+        color: #c0392b;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Downloads</h1>
+    <ul id="list"></ul>
+
+    <script>
+      const list = document.getElementById('list');
+
+      function formatBytes(n) {
+        if (!n || n <= 0) return '';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let i = 0;
+        while (n >= 1024 && i < units.length - 1) {
+          n /= 1024;
+          i++;
+        }
+        return n.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+      }
+
+      function stateLabel(state) {
+        return { completed: 'Færdig', progressing: 'Henter...', cancelled: 'Annulleret', interrupted: 'Afbrudt' }[state] || state;
+      }
+
+      function render(downloads) {
+        list.innerHTML = '';
+        if (downloads.length === 0) {
+          list.innerHTML = '<p class="empty">Ingen downloads endnu.</p>';
+          return;
+        }
+        for (const d of downloads) {
+          const li = document.createElement('li');
+
+          const row = document.createElement('div');
+          row.className = 'row';
+          const name = document.createElement('span');
+          name.className = 'filename';
+          name.textContent = d.filename;
+          row.appendChild(name);
+          const meta = document.createElement('span');
+          meta.className = 'meta state-' + d.state;
+          meta.textContent =
+            d.state === 'progressing'
+              ? `${formatBytes(d.receivedBytes)} / ${formatBytes(d.totalBytes)}`
+              : stateLabel(d.state);
+          row.appendChild(meta);
+          li.appendChild(row);
+
+          if (d.state === 'progressing' && d.totalBytes > 0) {
+            const progress = document.createElement('div');
+            progress.className = 'progress';
+            const fill = document.createElement('div');
+            fill.className = 'progress-fill';
+            fill.style.width = Math.min(100, (d.receivedBytes / d.totalBytes) * 100) + '%';
+            progress.appendChild(fill);
+            li.appendChild(progress);
+          }
+
+          const actions = document.createElement('div');
+          actions.className = 'actions';
+          if (d.state === 'progressing') {
+            const cancel = document.createElement('button');
+            cancel.textContent = 'Annuller';
+            cancel.addEventListener('click', () => window.woowilPages.cancelDownload(d.id));
+            actions.appendChild(cancel);
+          } else if (d.state === 'completed') {
+            const open = document.createElement('button');
+            open.textContent = 'Åbn';
+            open.addEventListener('click', () => window.woowilPages.openDownload(d.id));
+            actions.appendChild(open);
+
+            const showIn = document.createElement('button');
+            showIn.textContent = 'Vis i mappe';
+            showIn.addEventListener('click', () => window.woowilPages.showDownloadInFolder(d.id));
+            actions.appendChild(showIn);
+          }
+          const remove = document.createElement('button');
+          remove.textContent = 'Fjern';
+          remove.addEventListener('click', () => window.woowilPages.removeDownload(d.id).then(render));
+          actions.appendChild(remove);
+          li.appendChild(actions);
+
+          list.appendChild(li);
+        }
+      }
+
+      function refresh() {
+        window.woowilPages.getDownloads().then(render);
+      }
+
+      refresh();
+      window.woowilPages.onDownloadsChanged(refresh);
+      window.woowilPages.getSettings().then((settings) => {
+        document.documentElement.dataset.theme = settings.theme;
+      });
+      window.woowilPages.onThemeChange((theme) => {
+        document.documentElement.dataset.theme = theme;
+      });
+    </script>
+  </body>
+</html>

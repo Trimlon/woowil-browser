@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <title>Favoritter</title>
+    <style>
+      :root {
+        --bg: #f7f7fb;
+        --bg-elevated: #ffffff;
+        --text: #1b1b1f;
+        --text-secondary: #55525f;
+        --border: #ddd9e6;
+        --accent: #d6299e;
+      }
+      :root[data-theme='dark'] {
+        --bg: #14121b;
+        --bg-elevated: #1e1b29;
+        --text: #f2eefc;
+        --text-secondary: #b8b0cc;
+        --border: #34304a;
+        --accent: #ff3cac;
+      }
+
+      body {
+        font-family: sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        max-width: 720px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        transition: background 0.2s, color 0.2s;
+      }
+      h1 {
+        font-size: 1.4rem;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+      }
+      li {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      li a {
+        color: var(--text);
+        text-decoration: none;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      li a:hover {
+        color: var(--accent);
+        text-decoration: underline;
+      }
+      .empty {
+        color: var(--text-secondary);
+      }
+      .remove {
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        flex-shrink: 0;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Favoritter</h1>
+    <ul id="list"></ul>
+
+    <script>
+      const list = document.getElementById('list');
+
+      function render(bookmarks) {
+        list.innerHTML = '';
+        if (bookmarks.length === 0) {
+          list.innerHTML = '<p class="empty">Ingen favoritter endnu.</p>';
+          return;
+        }
+        for (const bookmark of bookmarks) {
+          const li = document.createElement('li');
+
+          const link = document.createElement('a');
+          link.href = bookmark.url;
+          link.textContent = bookmark.title || bookmark.url;
+          li.appendChild(link);
+
+          const remove = document.createElement('button');
+          remove.className = 'remove';
+          remove.textContent = '×';
+          remove.addEventListener('click', () => {
+            window.woowilPages.removeBookmark(bookmark.id).then(render);
+          });
+          li.appendChild(remove);
+
+          list.appendChild(li);
+        }
+      }
+
+      window.woowilPages.getBookmarks().then(render);
+      window.woowilPages.getSettings().then((settings) => {
+        document.documentElement.dataset.theme = settings.theme;
+      });
+      window.woowilPages.onThemeChange((theme) => {
+        document.documentElement.dataset.theme = theme;
+      });
+    </script>
+  </body>
+</html>

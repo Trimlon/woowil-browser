@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <title>Woowil toolbar</title>
+    <link rel="stylesheet" href="toolbar.css" />
+  </head>
+  <body>
+    <div class="tabstrip">
+      <button id="workspace-switcher" title="Arbejdsområder">🗂 <span id="workspace-name">Standard</span> ▾</button>
+      <div class="tabs-scroll" id="tabstrip">
+        <button id="new-tab" title="Ny fane">+</button>
+      </div>
+      <span id="incognito-badge" hidden>🕶 Privat</span>
+      <span id="active-profile-label"></span>
+      <button id="panel-toggle" title="Menu">☰</button>
+    </div>
+    <div class="workspace-menu" id="workspace-menu" hidden>
+      <div class="workspace-list" id="workspace-list"></div>
+      <form id="new-workspace-form">
+        <input id="new-workspace-name" placeholder="Nyt arbejdsområde..." autocomplete="off" />
+        <button type="submit">+</button>
+      </form>
+    </div>
+    <div class="toolbar">
+      <button id="back" disabled>&lt;</button>
+      <button id="forward" disabled>&gt;</button>
+      <button id="reload">&#8635;</button>
+      <div class="address-wrap">
+        <input id="address" type="text" placeholder="Indtast en adresse..." autocomplete="off" />
+        <div class="suggestions" id="suggestions" hidden></div>
+      </div>
+      <span id="zoom-indicator" hidden></span>
+      <button id="downloads-button" title="Downloads">⬇<span id="downloads-badge" hidden>0</span></button>
+      <button id="bookmark" title="Bogmærk">&#9734;</button>
+    </div>
+    <div class="find-bar" id="find-bar" hidden>
+      <input id="find-input" type="text" placeholder="Find på siden..." autocomplete="off" />
+      <span id="find-count"></span>
+      <button id="find-prev" title="Forrige">↑</button>
+      <button id="find-next" title="Næste">↓</button>
+      <button id="find-close" title="Luk">×</button>
+    </div>
+    <div class="permission-bar" id="permission-bar" hidden>
+      <span id="permission-text"></span>
+      <button id="permission-allow">Tillad</button>
+      <button id="permission-block">Bloker</button>
+    </div>
+    <div class="update-bar" id="update-bar" hidden>
+      <span id="update-text"></span>
+      <button id="update-restart">Genstart og opdater</button>
+      <button id="update-dismiss" title="Senere">×</button>
+    </div>
+    <div class="bookmarks-bar" id="bookmarks-bar"></div>
+
+    <div class="panel-backdrop" id="panel-backdrop" hidden></div>
+    <aside class="panel" id="panel" hidden>
+      <div class="panel-header">
+        <strong id="panel-active-name">Standard</strong>
+        <button id="panel-close" title="Luk">×</button>
+      </div>
+
+      <nav class="panel-links">
+        <button data-nav="woowil://settings">⚙ Indstillinger</button>
+        <button data-nav="woowil://history">🕘 Historik</button>
+        <button data-nav="woowil://bookmarks">★ Favoritter</button>
+        <button data-nav="woowil://downloads">⬇ Downloads</button>
+        <button id="new-window-btn">🪟 Nyt vindue</button>
+        <button id="new-incognito-btn">🕶 Nyt privat vindue</button>
+        <button id="check-updates-btn">🔄 Tjek for opdateringer</button>
+      </nav>
+
+      <div id="profile-section">
+        <h2>Brugere</h2>
+        <div id="profile-list"></div>
+
+        <button id="show-new-profile" type="button">+ Ny bruger</button>
+        <form id="new-profile-form" hidden>
+          <input id="new-profile-name" placeholder="Navn" autocomplete="off" />
+          <input id="new-profile-password" type="password" placeholder="Adgangskode" autocomplete="new-password" />
+          <input
+            id="new-profile-password2"
+            type="password"
+            placeholder="Gentag adgangskode"
+            autocomplete="new-password"
+          />
+          <p class="panel-error" id="new-profile-error" hidden></p>
+          <button type="submit">Opret bruger</button>
+        </form>
+      </div>
+    </aside>
+
+    <script src="toolbar.js"></script>
+  </body>
+</html>

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <title>Indstillinger</title>
+    <style>
+      :root {
+        --bg: #f7f7fb;
+        --bg-elevated: #ffffff;
+        --text: #1b1b1f;
+        --text-secondary: #55525f;
+        --border: #ddd9e6;
+        --input-bg: #ffffff;
+        --accent: #d6299e;
+        --accent2: #17aee0;
+      }
+      :root[data-theme='dark'] {
+        --bg: #14121b;
+        --bg-elevated: #1e1b29;
+        --text: #f2eefc;
+        --text-secondary: #b8b0cc;
+        --border: #34304a;
+        --input-bg: #241f33;
+        --accent: #ff3cac;
+        --accent2: #24d8ff;
+      }
+
+      body {
+        font-family: sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        max-width: 480px;
+        margin: 3rem auto;
+        padding: 0 1rem;
+        transition: background 0.2s, color 0.2s;
+      }
+      h1 {
+        font-size: 1.4rem;
+      }
+      label {
+        display: block;
+        margin-top: 1.5rem;
+        font-weight: 600;
+      }
+      input,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 0.4rem;
+        padding: 6px 8px;
+        font-size: 14px;
+        background: var(--input-bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+      }
+      .hint {
+        color: var(--text-secondary);
+        font-size: 13px;
+        margin-top: 0.3rem;
+      }
+      .saved {
+        color: #2a7a2a;
+        font-size: 13px;
+        margin-top: 0.5rem;
+        visibility: hidden;
+      }
+      .theme-toggle {
+        display: flex;
+        gap: 8px;
+        margin-top: 0.4rem;
+      }
+      .theme-toggle button {
+        flex: 1;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg-elevated);
+        color: var(--text);
+        cursor: pointer;
+      }
+      .theme-toggle button.active {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px var(--accent);
+      }
+      .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 1.5rem;
+      }
+      .checkbox-row input {
+        width: auto;
+        margin: 0;
+      }
+      .checkbox-row label {
+        margin: 0;
+        font-weight: 400;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Indstillinger</h1>
+
+    <label for="homepage">Startside</label>
+    <input id="homepage" type="text" placeholder="woowil://newtab" />
+    <p class="hint">Vises ved opstart og i nye faner.</p>
+
+    <label for="search-engine">Søgemaskine</label>
+    <select id="search-engine">
+      <option value="duckduckgo">DuckDuckGo</option>
+      <option value="google">Google</option>
+      <option value="bing">Bing</option>
+    </select>
+    <p class="hint">Bruges når du skriver en søgning i adressefeltet.</p>
+
+    <label>Tema</label>
+    <div class="theme-toggle">
+      <button id="theme-light" type="button">☀ Lys</button>
+      <button id="theme-dark" type="button">☾ Mørk</button>
+    </div>
+
+    <div class="checkbox-row">
+      <input id="ad-block" type="checkbox" />
+      <label for="ad-block">Bloker annoncer og trackere</label>
+    </div>
+
+    <div class="checkbox-row">
+      <input id="restore-session" type="checkbox" />
+      <label for="restore-session">Gendan forrige session ved opstart</label>
+    </div>
+
+    <p class="saved" id="saved">Gemt.</p>
+
+    <script>
+      const homepageInput = document.getElementById('homepage');
+      const searchEngineSelect = document.getElementById('search-engine');
+      const themeLightButton = document.getElementById('theme-light');
+      const themeDarkButton = document.getElementById('theme-dark');
+      const adBlockCheckbox = document.getElementById('ad-block');
+      const restoreSessionCheckbox = document.getElementById('restore-session');
+      const saved = document.getElementById('saved');
+
+      let savedTimeout;
+      function flashSaved() {
+        saved.style.visibility = 'visible';
+        clearTimeout(savedTimeout);
+        savedTimeout = setTimeout(() => (saved.style.visibility = 'hidden'), 1200);
+      }
+
+      function applyTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+        themeLightButton.classList.toggle('active', theme !== 'dark');
+        themeDarkButton.classList.toggle('active', theme === 'dark');
+      }
+
+      window.woowilPages.getSettings().then((settings) => {
+        homepageInput.value = settings.homepage;
+        searchEngineSelect.value = settings.searchEngine;
+        adBlockCheckbox.checked = settings.adBlock !== false;
+        restoreSessionCheckbox.checked = Boolean(settings.restoreSession);
+        applyTheme(settings.theme);
+      });
+      window.woowilPages.onThemeChange(applyTheme);
+
+      homepageInput.addEventListener('change', () => {
+        window.woowilPages.setSetting('homepage', homepageInput.value.trim() || 'woowil://newtab').then(flashSaved);
+      });
+      searchEngineSelect.addEventListener('change', () => {
+        window.woowilPages.setSetting('searchEngine', searchEngineSelect.value).then(flashSaved);
+      });
+      themeLightButton.addEventListener('click', () => {
+        window.woowilPages.setSetting('theme', 'light').then(flashSaved);
+      });
+      themeDarkButton.addEventListener('click', () => {
+        window.woowilPages.setSetting('theme', 'dark').then(flashSaved);
+      });
+      adBlockCheckbox.addEventListener('change', () => {
+        window.woowilPages.setSetting('adBlock', adBlockCheckbox.checked).then(flashSaved);
+      });
+      restoreSessionCheckbox.addEventListener('change', () => {
+        window.woowilPages.setSetting('restoreSession', restoreSessionCheckbox.checked).then(flashSaved);
+      });
+    </script>
+  </body>
+</html>

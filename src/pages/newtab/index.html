@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <title>Ny fane</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      :root {
+        --body-bg: #f5f3fa;
+        --wallpaper: url('wallpaper-light.jpg');
+        /* Unlike the dark theme, text here is dark-on-light: the overlay
+           needs to be MOST opaque right behind the text (center) and fade
+           out towards the edges, so the artwork's colour still shows. */
+        --overlay: radial-gradient(circle at 50% 46%, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.4) 62%, rgba(255, 255, 255, 0.05) 100%);
+        --text: #1b1428;
+        --text-secondary: #55506a;
+        --input-bg: rgba(255, 255, 255, 0.6);
+        --input-border: rgba(0, 0, 0, 0.14);
+        --placeholder: #746e88;
+        --pill-bg: rgba(255, 255, 255, 0.6);
+        --pill-border: rgba(0, 0, 0, 0.12);
+        --pill-hover-bg: rgba(214, 41, 158, 0.12);
+        --pill-hover-border: rgba(214, 41, 158, 0.55);
+      }
+      :root[data-theme='dark'] {
+        --body-bg: #0b0912;
+        --wallpaper: url('wallpaper.jpg');
+        --overlay: radial-gradient(circle at 50% 38%, rgba(15, 10, 25, 0.35), rgba(8, 6, 14, 0.88) 72%);
+        --text: #f6f3ff;
+        --text-secondary: #cfc8e6;
+        --input-bg: rgba(255, 255, 255, 0.07);
+        --input-border: rgba(255, 255, 255, 0.16);
+        --placeholder: #a89fc4;
+        --pill-bg: rgba(255, 255, 255, 0.06);
+        --pill-border: rgba(255, 255, 255, 0.14);
+        --pill-hover-bg: rgba(255, 60, 190, 0.16);
+        --pill-hover-border: rgba(255, 60, 190, 0.55);
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        font-family: -apple-system, 'Segoe UI', sans-serif;
+      }
+      body {
+        background: var(--body-bg);
+      }
+
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background-image: var(--wallpaper);
+        background-size: cover;
+        background-position: center 30%;
+        filter: brightness(0.4) saturate(1.15);
+        z-index: 0;
+      }
+      :root[data-theme='light'] .backdrop,
+      :root:not([data-theme]) .backdrop {
+        filter: none;
+      }
+      .backdrop::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: var(--overlay);
+      }
+
+      main {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        text-align: center;
+        padding: 0 1rem;
+        color: var(--text);
+      }
+
+      .logo {
+        width: 128px;
+        height: 128px;
+        border-radius: 50%;
+        filter: drop-shadow(0 0 26px rgba(255, 60, 190, 0.55)) drop-shadow(0 0 46px rgba(30, 200, 255, 0.35));
+        animation: pulse 4s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          transform: scale(1);
+          filter: drop-shadow(0 0 26px rgba(255, 60, 190, 0.5)) drop-shadow(0 0 46px rgba(30, 200, 255, 0.32));
+        }
+        50% {
+          transform: scale(1.04);
+          filter: drop-shadow(0 0 34px rgba(255, 60, 190, 0.7)) drop-shadow(0 0 60px rgba(30, 200, 255, 0.48));
+        }
+      }
+
+      h1 {
+        margin: 0.7rem 0 0;
+        font-size: 3rem;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        background: linear-gradient(90deg, #ff3cac, #7a5cff, #24d8ff);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .tagline {
+        color: var(--text-secondary);
+        margin: 0.3rem 0 2.2rem;
+        font-size: 15px;
+      }
+
+      form {
+        width: min(560px, 90vw);
+      }
+      #search {
+        width: 100%;
+        padding: 14px 22px;
+        border-radius: 999px;
+        border: 1px solid var(--input-border);
+        background: var(--input-bg);
+        backdrop-filter: blur(8px);
+        color: var(--text);
+        font-size: 15px;
+        outline: none;
+        transition: box-shadow 0.15s, border-color 0.15s;
+      }
+      #search::placeholder {
+        color: var(--placeholder);
+      }
+      #search:focus {
+        border-color: rgba(255, 60, 190, 0.6);
+        box-shadow: 0 0 0 3px rgba(255, 60, 190, 0.25);
+      }
+
+      nav.quicklinks {
+        display: flex;
+        gap: 12px;
+        margin-top: 2.2rem;
+      }
+      nav.quicklinks a {
+        padding: 10px 20px;
+        border-radius: 999px;
+        background: var(--pill-bg);
+        border: 1px solid var(--pill-border);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 14px;
+        transition: background 0.15s, border-color 0.15s, transform 0.15s;
+      }
+      nav.quicklinks a:hover {
+        background: var(--pill-hover-bg);
+        border-color: var(--pill-hover-border);
+        transform: translateY(-1px);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <main>
+      <img class="logo" src="logo.png" alt="Woowil" />
+      <h1>Woowil</h1>
+      <p class="tagline">Din browser. Dine regler.</p>
+      <form id="search-form">
+        <input id="search" type="text" placeholder="Søg eller indtast en adresse..." autofocus />
+      </form>
+      <nav class="quicklinks">
+        <a href="woowil://settings">Indstillinger</a>
+        <a href="woowil://history">Historik</a>
+        <a href="woowil://bookmarks">Favoritter</a>
+      </nav>
+    </main>
+    <script>
+      document.getElementById('search-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const value = document.getElementById('search').value.trim();
+        if (value) {
+          window.woowilPages.navigate(value);
+        }
+      });
+
+      function applyTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+      }
+      window.woowilPages.getSettings().then((settings) => applyTheme(settings.theme));
+      window.woowilPages.onThemeChange(applyTheme);
+    </script>
+  </body>
+</html>
