@@ -52,11 +52,14 @@ function build(args) {
 
 // Only top-level dist/ files matter for a release — dist/*-unpacked/ holds
 // the raw (unzipped) app tree, not something users download directly.
+// .blockmap files are needed too: electron-updater's NSIS/AppImage
+// differential downloader fetches <installer>.blockmap alongside the
+// installer itself.
 function collectArtifacts() {
   return fs
     .readdirSync(DIST)
     .filter((name) => fs.statSync(path.join(DIST, name)).isFile())
-    .filter((name) => /\.(AppImage|exe)$/.test(name) || /^latest.*\.yml$/.test(name));
+    .filter((name) => /\.(AppImage|exe)(\.blockmap)?$/.test(name) || /^latest.*\.yml$/.test(name));
 }
 
 async function gh(publishToken, method, url, body) {
