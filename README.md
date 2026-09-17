@@ -37,10 +37,11 @@ ikke Wine og er derfor standardvalget.
 ## Auto-opdatering
 
 Bruger `electron-updater` mod GitHub Releases i et **privat** repo
-(`package.json` → `build.publish`). Kun Linux/AppImage er koblet til rigtig
-opdatering lige nu (Linux-first, jf. beslutningen om at bygge et rent
-Linux-miljø); portable Windows-exe'en supporteres ikke godt af
-electron-updater (den kræver en rigtig installer, dvs. NSIS + Wine).
+(`package.json` → `build.publish`). Linux/AppImage har altid rigtig
+auto-opdatering; Windows får det kun hvis `wine` er installeret på
+byggemaskinen (så der kan bygges en rigtig NSIS-installer) — uden Wine
+bygges der i stedet en portabel .exe, som virker fint at køre men ikke
+selv kan opdatere (electron-updater kræver en installer på Windows).
 
 **Vigtigt om et privat repo + auto-update**: appen skal selv kunne læse
 releases uden dig til at være logget ind — det kræver en GitHub-token
@@ -48,19 +49,27 @@ releases uden dig til at være logget ind — det kræver en GitHub-token
 trække den token ud igen. Løsningen her bruger derfor **to forskellige
 tokens** med vidt forskellig magt:
 
-1. **Publish-token** (bruges kun på byggemaskinen, aldrig i appen): en
-   klassisk PAT med `repo`-scope, sat som miljøvariabel `GH_TOKEN` når du
-   kører `npm run publish:linux`. Denne uploader nye releases — den skal
-   aldrig ligge i en fil.
-2. **Runtime-token** (indbygges i appen, alle brugere kan i princippet se
-   den): en **fine-grained** PAT scopet til **kun dette ene repo**, med
-   **kun** "Contents: Read-only" — intet andet. Denne kan læse releases,
-   intet mere. Sættes ved build-tid, ikke i package.json:
-   ```bash
-   GH_TOKEN=<publish-token med repo-scope> \
-     npx electron-builder --linux AppImage --publish always \
-     -c.publish.token=<runtime read-only token>
-   ```
+1. **Publish-token** (`GH_PUBLISH_TOKEN`, bruges kun på byggemaskinen,
+   aldrig i appen): en klassisk PAT med `repo`-scope. Opretter releasen og
+   uploader filerne — skal aldrig ligge i en fil, kun gives som
+   miljøvariabel.
+2. **Runtime-token** (`GH_RUNTIME_TOKEN`, indbygges i appen, alle brugere
+   kan i princippet se den): en **fine-grained** PAT scopet til **kun
+   dette ene repo**, med **kun** "Contents: Read-only" — intet andet.
+
+### Udgiv en ny version
+
+```bash
+GH_PUBLISH_TOKEN=<classic PAT, repo-scope> \
+GH_RUNTIME_TOKEN=<fine-grained PAT, read-only, kun dette repo> \
+  npm run release
+```
+
+Kører `scripts/release.js`: bygger Linux (AppImage) og Windows (NSIS hvis
+Wine er installeret, ellers portabel .exe), opretter/genbruger GitHub
+release'en for den version der står i `package.json`, og uploader alle
+filer dertil. Kan køres igen for samme version — den lægger nye filer op
+over de gamle i stedet for at fejle.
 
 ### Opsætning (skal gøres én gang)
 
@@ -71,7 +80,7 @@ tokens** med vidt forskellig magt:
    → Personal access tokens.
 4. Push koden til repoet (`git remote add origin ...`, `git push -u origin
    main`).
-5. Kør publish-kommandoen ovenfor for at lave den første release.
+5. Kør `npm run release` (se ovenfor) for at lave den første udgivelse.
 
 Efter det: appen tjekker selv for nye versioner ved opstart, downloader i
 baggrunden, og viser en bjælke ("Woowil x.x.x er klar — genstart for at

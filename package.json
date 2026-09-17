@@ -11,7 +11,7 @@
     "build:win": "electron-builder --win portable",
     "build:win-installer": "electron-builder --win nsis",
     "build:all": "electron-builder --linux AppImage --win portable",
-    "publish:linux": "electron-builder --linux AppImage --publish always"
+    "release": "node scripts/release.js"
   },
   "devDependencies": {
     "electron": "^44.0.0",
