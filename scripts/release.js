@@ -94,7 +94,7 @@ async function findOrCreateRelease(publishToken, owner, repo, version) {
   });
 }
 
-async function uploadAsset(publishToken, release, filePath) {
+async function uploadAsset(publishToken, release, filePath, attempt = 1) {
   // GitHub silently mangles spaces in asset names (turns them into dots),
   // which is how electron-builder names the Windows output — replace them
   // ourselves first so the uploaded name stays predictable.
@@ -105,14 +105,24 @@ async function uploadAsset(publishToken, release, filePath) {
     await fetch(existing.url, { method: 'DELETE', headers: { Authorization: 'token ' + publishToken } });
   }
   const uploadUrl = release.upload_url.replace('{?name,label}', '') + '?name=' + encodeURIComponent(name);
-  console.log(`→ uploader ${name} (${(fs.statSync(filePath).size / 1024 / 1024).toFixed(1)} MB)`);
-  const res = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: { Authorization: 'token ' + publishToken, 'Content-Type': 'application/octet-stream' },
-    body: fs.readFileSync(filePath),
-  });
-  if (!res.ok) {
-    throw new Error(`Upload af ${name} fejlede: ${res.status} ${await res.text()}`);
+  console.log(`→ uploader ${name} (${(fs.statSync(filePath).size / 1024 / 1024).toFixed(1)} MB), forsøg ${attempt}`);
+  try {
+    const res = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { Authorization: 'token ' + publishToken, 'Content-Type': 'application/octet-stream' },
+      body: fs.readFileSync(filePath),
+    });
+    if (!res.ok) {
+      throw new Error(`${res.status} ${await res.text()}`);
+    }
+  } catch (error) {
+    // Large uploads (100+ MB) occasionally drop mid-transfer on a flaky
+    // connection — worth a couple of retries before giving up outright.
+    if (attempt >= 3) {
+      throw new Error(`Upload af ${name} fejlede efter ${attempt} forsøg: ${error.message}`);
+    }
+    console.error(`  ✖ forsøg ${attempt} fejlede (${error.message}), prøver igen...`);
+    return uploadAsset(publishToken, release, filePath, attempt + 1);
   }
 }
 
@@ -145,8 +155,12 @@ async function main() {
   const artifacts = collectArtifacts();
   if (artifacts.length === 0) fail('Ingen build-artefakter fundet i dist/.');
 
-  const release = await findOrCreateRelease(publishToken, owner, repo, version);
+  let release = await findOrCreateRelease(publishToken, owner, repo, version);
   for (const name of artifacts) {
+    // Re-fetch so `release.assets` reflects anything already uploaded
+    // earlier in this same run (needed for the delete-before-replace check
+    // on a re-run after a partial failure).
+    release = await gh(publishToken, 'GET', release.url);
     await uploadAsset(publishToken, release, path.join(DIST, name));
   }
 
