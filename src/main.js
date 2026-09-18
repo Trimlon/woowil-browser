@@ -666,6 +666,14 @@ function createWindow(store, opts = {}) {
 
   function restartAndUpdate() {
     autoUpdater.quitAndInstall();
+    // quitAndInstall() spawns the new version, then calls Electron's
+    // app.quit() to close this instance — but app.quit()'s "close all
+    // windows first" step only ever looks at BrowserWindow instances, and
+    // Woowil's windows are BaseWindow. With nothing for it to close, quit()
+    // never actually completes, and this process is left running
+    // alongside the freshly-launched new one. Force it after a short grace
+    // period if that happens.
+    setTimeout(() => app.exit(0), 1000);
   }
 
   function createTab(url, workspaceId) {
