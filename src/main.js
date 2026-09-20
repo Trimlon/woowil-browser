@@ -1204,6 +1204,13 @@ function createWindow(store, opts = {}) {
   });
 
   ctx = {
+    win,
+    openExternalUrl: (url) => {
+      if (win.isMinimized()) { win.restore(); }
+      win.show();
+      win.focus();
+      createTab(url, activeWorkspaceId);
+    },
     navigate: navigateAction,
     goBack: () => { const tab = activeTab(); if (tab && tab.view.webContents.navigationHistory.canGoBack()) tab.view.webContents.navigationHistory.goBack(); },
     goForward: () => { const tab = activeTab(); if (tab && tab.view.webContents.navigationHistory.canGoForward()) tab.view.webContents.navigationHistory.goForward(); },
@@ -1283,6 +1290,9 @@ function createWindow(store, opts = {}) {
     sendBookmarksBar();
     sendDownloadsBadge();
     loadWorkspacesAndOpenTabs(opts.isInitial);
+    if (opts.startupUrl) {
+      createTab(opts.startupUrl, activeWorkspaceId);
+    }
     if (pendingUpdateVersion) {
       showUpdateReady(pendingUpdateVersion);
     }
@@ -1342,15 +1352,48 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil-pages:show-download-in-folder', (event, id) => tabCtxFor(event)?.showDownloadInFolder(id));
 }
 
-app.whenReady().then(() => {
-  // Handles the toolbar view, which uses the default session.
-  protocol.handle('woowil', servePage);
-  const store = new ProfileStore(app.getPath('userData'));
-  registerIpcHandlers(store);
-  setupAutoUpdater();
-  createWindow(store, { isInitial: true });
-});
+// When Woowil is the OS default browser, xdg-open (or any other app - the
+// original bug report was Claude Code's own login flow) launches it as
+// `<electron/appimage> ... <the actual URL>` (see woowil-install-own-
+// browser.sh's `Exec=... %U`). Without this, that URL was silently dropped
+// on the floor: every window always opened a plain homepage tab regardless
+// of argv, and - with no single-instance lock at all - opening a second
+// link while Woowil was already running spawned a whole separate Electron
+// process instead of a tab in the existing window. Not a URL-scheme
+// (`x-scheme-handler`) match; the .desktop's MimeType is plain http(s).
+function extractUrlFromArgv(argv) {
+  return argv.find((arg) => /^https?:\/\//i.test(arg));
+}
 
-app.on('window-all-closed', () => {
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
   app.quit();
-});
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const url = extractUrlFromArgv(argv);
+    const contexts = [...windowContexts.values()];
+    const ctx = contexts.find((c) => c.win.isFocused()) || contexts[0];
+    if (!ctx) {
+      return;
+    }
+    if (url) {
+      ctx.openExternalUrl(url);
+    } else {
+      if (ctx.win.isMinimized()) { ctx.win.restore(); }
+      ctx.win.focus();
+    }
+  });
+
+  app.whenReady().then(() => {
+    // Handles the toolbar view, which uses the default session.
+    protocol.handle('woowil', servePage);
+    const store = new ProfileStore(app.getPath('userData'));
+    registerIpcHandlers(store);
+    setupAutoUpdater();
+    createWindow(store, { isInitial: true, startupUrl: extractUrlFromArgv(process.argv) });
+  });
+
+  app.on('window-all-closed', () => {
+    app.quit();
+  });
+}

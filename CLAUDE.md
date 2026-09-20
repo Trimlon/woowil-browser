@@ -55,6 +55,27 @@ overraskelser i koden:
   kræves, genstarte hele processen med `--ozone-platform=x11` som ægte argv
   (`process.argv`), ikke som en switch tilføjet fra JS. Se koden øverst i
   `main.js`.
+- **Manglende default-browser-håndtering (fundet ved rigtig brug: Claude
+  Code CLI's login kunne ikke åbne forbindelsen, fordi det link, som skulle
+  åbnes, blev fuldstændig ignoreret)**. `woowil-install-own-browser.sh` i
+  woowil-os sætter korrekt `Exec=... %U` og `MimeType=text/html;
+  x-scheme-handler/http;x-scheme-handler/https;` i det installerede
+  `.desktop`-ikon — OS-siden af "sæt som standardbrowser" var altid korrekt.
+  Manglen var i selve appen: `main.js` havde **ingen** `app.
+  requestSingleInstanceLock()`/`'second-instance'`-håndtering og læste
+  aldrig en URL fra `process.argv` ved opstart — ethvert link åbnet via
+  `xdg-open`/en anden app endte enten i en helt ny, overflødig
+  Electron-proces (uden single-instance-lock) eller i en tom "Ny fane", med
+  selve URL'en droppet på gulvet. Fixet: `requestSingleInstanceLock()` +
+  `'second-instance'`-handler (finder det fokuserede vindues `ctx` via
+  `windowContexts`, åbner URL'en som ny fane, fokuserer vinduet) + samme
+  URL-udtræk (`extractUrlFromArgv`, matcher `^https?://`) anvendt på
+  `process.argv` ved koldstart. Verificeret med rigtige
+  `electron . <url>`-kald: både koldstart-med-URL og
+  allerede-kørende-instans+ny-URL åbner nu korrekt en ny fane i stedet for
+  at tabe linket. **Ethvert nyt sted, der kan modtage et link udefra (nyt
+  OS-integration, protokol-handler osv.), skal gå gennem `ctx.
+  openExternalUrl`, ikke oprette et helt nyt vindue/instans.**
 
 **Sikkerhedsgrænser (kontroller inden nye funktioner ændrer disse):**
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` overalt.
