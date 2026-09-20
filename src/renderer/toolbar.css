@@ -9,7 +9,7 @@
   --input-bg: #ffffff;
   --panel-bg: #ffffff;
   --panel-item-hover: #f0f0f0;
-  --accent: #d6299e;
+  --accent: #9a29d6;
   --error: #c0392b;
 }
 :root[data-theme='dark'] {
@@ -23,7 +23,7 @@
   --input-bg: #241f33;
   --panel-bg: #1a1726;
   --panel-item-hover: #2a2540;
-  --accent: #ff3cac;
+  --accent: #d03cff;
   --error: #ff6b6b;
 }
 
