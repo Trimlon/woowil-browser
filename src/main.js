@@ -1,3 +1,25 @@
+// Force XWayland (X11) instead of native Wayland on Linux, before Electron's
+// own bootstrap picks an Ozone backend. Each window is a single BaseWindow
+// with several WebContentsView children (toolbar + one per tab); under
+// Chromium's native-Wayland Ozone backend, a real mouse click doesn't hand
+// keyboard focus to the clicked child view at all (confirmed: the address
+// bar accepted synthetic CDP input but ignored real clicks/typing under
+// native Wayland; running under X11/XWayland fixed it outright).
+// `app.commandLine.appendSwitch('ozone-platform', 'x11')` does NOT work here
+// - child renderer/GPU processes pick it up (it's in their spawned argv),
+// but the browser process's own window backend is already chosen by the time
+// our script runs, so the window silently never appears. The only reliable
+// fix is relaunching the whole process with the flag as real argv, before
+// touching `electron` at all.
+if (process.platform === 'linux' && !process.argv.includes('--ozone-platform=x11')) {
+  const { spawn } = require('node:child_process');
+  spawn(process.execPath, ['--ozone-platform=x11', ...process.argv.slice(1)], {
+    detached: true,
+    stdio: 'inherit',
+  }).unref();
+  process.exit(0);
+}
+
 const {
   app,
   BaseWindow,

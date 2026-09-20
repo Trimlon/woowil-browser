@@ -36,6 +36,25 @@ overraskelser i koden:
   `restartAndUpdate()`. **Hold øje med lignende steder** hvis noget "burde
   lukke appen" men ikke gør det — mistænk altid BaseWindow-vs-BrowserWindow
   først.
+- **Kendt konsekvens (fundet og rettet efter migrering til en Wayland-baseret
+  udviklingsmaskine)**: under Chromiums native Wayland Ozone-backend
+  registrerer et rigtigt museklik på adressefeltet (eller et hvilket som
+  helst andet felt i `toolbar`-viewet) aldrig tastaturfokus i den klikkede
+  `WebContentsView` — feltet ser normalt ud, men intet sker når man skriver.
+  Bekræftet ved at sammenligne CDP-simuleret input (virkede altid, fordi det
+  går uden om selve klik-/fokus-routingen) med rigtige `xdotool`-klik/tastatur
+  (virkede kun under X11/XWayland, ikke under native Wayland). Ramte ikke den
+  oprindelige X11-udviklingsmaskine, kun en ny Wayland-session — endnu et
+  eksempel på at BaseWindow+flere WebContentsViews er den usædvanlige
+  arkitektur, der forklarer overraskelser. `app.commandLine.appendSwitch(
+  'ozone-platform', 'x11')` retter det **ikke** — child-processer (renderer/
+  GPU) arver switchen fint, men selve vinduets Ozone-backend er allerede
+  valgt, før main.js's JS overhovedet kører, så vinduet bliver aldrig
+  oprettet synligt (ingen fejl i loggen, det forsvinder bare). Den eneste
+  pålidelige fix: helt øverst i `main.js`, før `electron` overhovedet
+  kræves, genstarte hele processen med `--ozone-platform=x11` som ægte argv
+  (`process.argv`), ikke som en switch tilføjet fra JS. Se koden øverst i
+  `main.js`.
 
 **Sikkerhedsgrænser (kontroller inden nye funktioner ændrer disse):**
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` overalt.
