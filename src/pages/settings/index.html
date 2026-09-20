@@ -11,7 +11,7 @@
         --text-secondary: #55525f;
         --border: #ddd9e6;
         --input-bg: #ffffff;
-        --accent: #d6299e;
+        --accent: #9a29d6;
         --accent2: #17aee0;
       }
       :root[data-theme='dark'] {
@@ -21,7 +21,7 @@
         --text-secondary: #b8b0cc;
         --border: #34304a;
         --input-bg: #241f33;
-        --accent: #ff3cac;
+        --accent: #d03cff;
         --accent2: #24d8ff;
       }
 
@@ -98,6 +98,25 @@
         font-weight: 400;
         cursor: pointer;
       }
+      .data-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 0.6rem;
+      }
+      .data-actions button {
+        flex: 1;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg-elevated);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .data-actions button.danger {
+        border-color: #c0392b;
+        color: #c0392b;
+      }
     </style>
   </head>
   <body>
@@ -131,7 +150,19 @@
       <label for="restore-session">Gendan forrige session ved opstart</label>
     </div>
 
+    <label>Browserdata (denne profil)</label>
+    <div class="data-actions">
+      <button id="clear-cache" type="button">Ryd cache</button>
+      <button id="clear-cookies" type="button" class="danger">Ryd cookies og login</button>
+    </div>
+    <p class="hint">
+      "Ryd cache" er ufarligt og logger dig ikke ud nogen steder — brug den hvis en side ser forkert eller forældet ud.
+      "Ryd cookies og login" logger dig ud af alt, du er logget ind på i denne profil — brug den hvis en side bliver ved med at give problemer.
+    </p>
+
     <p class="saved" id="saved">Gemt.</p>
+
+    <p class="hint" id="version" style="margin-top: 2rem; text-align: center;"></p>
 
     <script>
       const homepageInput = document.getElementById('homepage');
@@ -140,6 +171,8 @@
       const themeDarkButton = document.getElementById('theme-dark');
       const adBlockCheckbox = document.getElementById('ad-block');
       const restoreSessionCheckbox = document.getElementById('restore-session');
+      const clearCacheButton = document.getElementById('clear-cache');
+      const clearCookiesButton = document.getElementById('clear-cookies');
       const saved = document.getElementById('saved');
 
       let savedTimeout;
@@ -154,6 +187,10 @@
         themeLightButton.classList.toggle('active', theme !== 'dark');
         themeDarkButton.classList.toggle('active', theme === 'dark');
       }
+
+      window.woowilPages.getVersion().then((version) => {
+        document.getElementById('version').textContent = 'Woowil ' + version;
+      });
 
       window.woowilPages.getSettings().then((settings) => {
         homepageInput.value = settings.homepage;
@@ -181,6 +218,15 @@
       });
       restoreSessionCheckbox.addEventListener('change', () => {
         window.woowilPages.setSetting('restoreSession', restoreSessionCheckbox.checked).then(flashSaved);
+      });
+      clearCacheButton.addEventListener('click', () => {
+        window.woowilPages.clearCache().then(flashSaved);
+      });
+      clearCookiesButton.addEventListener('click', () => {
+        if (!confirm('Dette logger dig ud af alt, du er logget ind på i denne profil. Fortsæt?')) {
+          return;
+        }
+        window.woowilPages.clearCookiesAndSiteData().then(flashSaved);
       });
     </script>
   </body>

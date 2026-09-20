@@ -76,6 +76,30 @@ overraskelser i koden:
   at tabe linket. **Ethvert nyt sted, der kan modtage et link udefra (nyt
   OS-integration, protokol-handler osv.), skal gå gennem `ctx.
   openExternalUrl`, ikke oprette et helt nyt vindue/instans.**
+- **Kendt konsekvens af X11-tvangen (`getContentBounds()` er upålidelig)**:
+  ved maksimering via vindueshåndteringen (ikke ved at trække et hjørne)
+  under den tvungne X11-ozone-backend forblev `win.getContentBounds()` et
+  stykke tid med den GAMLE, lille størrelse, selvom `win.isMaximized()` og
+  `win.getBounds()` allerede var opdateret — resultatet var et stort sort
+  område, fordi `toolbar`/fane-viewsne blev sat til den forkerte størrelse.
+  `layout()` bruger nu `win.getBounds()` i stedet (vinduet har ingen egen
+  OS-ramme/titellinje, så indhold = ydre størrelse her). Lyt også efter
+  `'maximize'`/`'unmaximize'`, ikke kun `'resize'` — de fyrer uafhængigt.
+- **`sendWorkspaces()` må ALDRIG også persistere** — den bruges både til
+  rene forespørgsler (toolbarens `getWorkspaces()`-kald ved opstart, FØR
+  `loadWorkspacesAndOpenTabs` har læst den rigtige gemte tilstand fra disk)
+  og til at fortælle renderer'en om en reel ændring. Da den tidligere også
+  kaldte `persistWorkspaceState()`, overskrev den allerførste forespørgsel
+  hver eneste opstart den rigtige session med tomme standardværdier — det
+  så ud som om browseren var "ren hver gang", uanset `restoreSession`.
+  Fjern aldrig igen persistering herfra; kald `persistWorkspaceState()`
+  eksplicit i de funktioner, der faktisk ændrer noget.
+- **`woowil:navigate`-kanalen bruges af BÅDE `preload.js` (toolbarens
+  adressefelt) OG `pages-preload.js` (alle interne `woowil://`-siders egne
+  søge-/adressefelter, fx ny-fane-sidens)** — men handleren matchede kun
+  `ctxFor` (kun toolbar-webContents), ikke `tabCtxFor` (fane-webContents).
+  Ny-fane-sidens søgefelt gjorde derfor ingenting ved indsendelse. Handleren
+  skal altid tjekke begge: `ctxFor(event) ?? tabCtxFor(event)`.
 
 **Sikkerhedsgrænser (kontroller inden nye funktioner ændrer disse):**
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` overalt.
@@ -179,12 +203,23 @@ installeret som standard) — `sudo pacman -S fuse2`, eller kør med
 
 ## Nuværende status (opdatér denne sektion når noget ændrer sig)
 
-- Seneste version: **0.1.3** (se `package.json`).
+- Seneste version: se `package.json` (bumpes ved hver release).
 - GitHub: privat repo `Trimlon/woowil-browser`, gren `main`.
-- Kørende hos brugeren: en Windows-pc og en Arch Linux-maskine, begge sat op
-  til at auto-opdatere. v0.1.3 er endnu ikke bekræftet at virke på Arch'en
-  (det var netop den v0.1.2-bug der blev fundet og rettet) — spørg brugeren
-  om status hvis det er relevant.
+- Kørende hos brugeren: primært en rigtig Woowil OS-installation nu (efter
+  at have skiftet fra almindelig Arch). Udvikling/test i denne session er
+  foregået på en delt, fjernstyret cloud-udviklingsmaskine (KDE + krdp) —
+  **ikke** brugerens rigtige maskine. Vigtig lære fra det: den maskines
+  fjernskrivebordsforbindelse har sin egen, ægte fejl i AltGr-tastatur-
+  tilstand (Chromium glemmer at AltGr stadig er holdt nede mellem
+  keydown-events — bekræftet med rå input-logning: `alt: true` på selve
+  AltGr-tasten, men `alt: false` på den efterfølgende taste, der skulle
+  være AltGr-skiftet). Det gav "@" (og formentlig andre AltGr-tegn) som
+  bare den ukombinerede tast i stedet. **Bekræftet IKKE at ske på brugerens
+  egen, rigtige Woowil OS-maskine** — det er et miljø-specifikt kvirk ved
+  denne ene udviklingsmaskines input-videresendelse, ikke en Woowil
+  Browser-bug. Antag ikke det samme gælder næste gang; test på rigtig
+  hardware hvis muligt, og mistænk denne artefakt før noget andet hvis
+  AltGr-tegn opfører sig mystisk her.
 - Ingen automatiserede tests findes endnu — al verifikation har været manuel
   (se testmetode ovenfor).
 

@@ -352,7 +352,17 @@ function createWindow(store, opts = {}) {
   }
 
   function layout() {
-    const { width, height } = win.getContentBounds();
+    // getContentBounds() (not used here on purpose) lags behind on this
+    // window specifically when maximized via the window manager (as
+    // opposed to dragging an edge) under the forced-X11 ozone backend -
+    // found live: it kept reporting the pre-maximize size for a while
+    // after win.isMaximized() and getBounds() had already updated, leaving
+    // the toolbar/tab views sized for the old, small window with a large
+    // black area filling the rest. getBounds() is always immediately
+    // correct, and this window has no OS frame/title bar of its own (its
+    // own toolbar is the only chrome), so content bounds and outer bounds
+    // are the same thing here anyway.
+    const { width, height } = win.getBounds();
     if (panelOpen) {
       toolbar.setBounds({ x: 0, y: 0, width, height });
       return;
@@ -380,6 +390,15 @@ function createWindow(store, opts = {}) {
     }
   }
   win.on('resize', layout);
+  // 'resize' alone isn't reliable for a maximize triggered via the window
+  // manager (as opposed to dragging an edge) under the forced-X11 ozone
+  // backend (see the ozone-platform=x11 relaunch above) - found live: the
+  // outer window genuinely grew to fill the screen, but the toolbar/tab
+  // WebContentsViews stayed sized for the old, small bounds, leaving a
+  // large black area. 'maximize'/'unmaximize' fire independently of
+  // 'resize' and cover exactly this case.
+  win.on('maximize', layout);
+  win.on('unmaximize', layout);
 
   function setPanelOpen(open) {
     panelOpen = open;
@@ -500,9 +519,19 @@ function createWindow(store, opts = {}) {
     persistWorkspaceState();
   }
 
+  // Notifies the renderer only - does not persist. It's also wired up as
+  // the response to a plain "give me the current workspaces" query the
+  // toolbar fires as soon as it loads (see toolbar.js's top-level
+  // window.woowil.getWorkspaces() call), which happens before this
+  // window's own loadWorkspacesAndOpenTabs has populated `workspaces` from
+  // disk. persistWorkspaceState() used to live here too, which meant that
+  // very first query overwrote the real saved session (tabs, workspace
+  // list) with the empty startup defaults, before restoration ever read
+  // it - every launch looked "clean" no matter what restoreSession was
+  // set to. Callers that actually change workspace state now persist
+  // explicitly themselves.
   function sendWorkspaces() {
     toolbar.webContents.send('workspaces', { workspaces, activeWorkspaceId });
-    persistWorkspaceState();
   }
 
   function persistWorkspaceState() {
@@ -918,6 +947,7 @@ function createWindow(store, opts = {}) {
       createTab(homepage(), id);
     }
     sendWorkspaces();
+    persistWorkspaceState();
   }
 
   function createWorkspaceAction(name) {
@@ -933,6 +963,7 @@ function createWindow(store, opts = {}) {
     }
     workspace.name = (name || '').trim() || workspace.name;
     sendWorkspaces();
+    persistWorkspaceState();
   }
 
   // Refuses to delete the last remaining workspace. Closes every tab that
@@ -956,6 +987,7 @@ function createWindow(store, opts = {}) {
       closeTab(tab.id);
     }
     sendWorkspaces();
+    persistWorkspaceState();
   }
 
   function duplicateTabAction(id) {
@@ -1162,6 +1194,17 @@ function createWindow(store, opts = {}) {
     if (input.type !== 'keyDown') {
       return false;
     }
+    // AltGr (needed for @ and other symbols on Danish/German/many
+    // non-US layouts) is reported by Chromium on Linux as control+alt both
+    // true at once - indistinguishable from a real Ctrl+Alt chord at this
+    // API level. None of our own shortcuts ever need both together, so
+    // treat that combination as "the user is typing a character", not a
+    // shortcut. Without this, e.g. AltGr+2 (-> "@" on a Danish layout)
+    // hits the ctrl+1-9 workspace-switch shortcut below instead of typing
+    // "@" at all - found live, it broke logging into Google/YouTube.
+    if (input.control && input.alt) {
+      return false;
+    }
     const k = input.key;
     const ctrl = input.control;
     const shift = input.shift;
@@ -1254,6 +1297,17 @@ function createWindow(store, opts = {}) {
     newIncognitoWindow: () => createWindow(store, { incognito: true }),
     getSettings: () => store.getSettings(currentProfileId),
     setSetting: setSettingAction,
+    // Troubleshooting tools: the only way today to recover from a site
+    // stuck on stale cached assets, or to force a fresh login somewhere,
+    // is to clear this profile's own session data. Cache is safe (doesn't
+    // log anything out); cookies/site data logs the profile out of every
+    // site it was signed into, same as any other browser's "clear
+    // browsing data".
+    clearCache: () => session.fromPartition('persist:profile-' + currentProfileId).clearCache(),
+    clearCookiesAndSiteData: () =>
+      session.fromPartition('persist:profile-' + currentProfileId).clearStorageData({
+        storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage', 'serviceworkers', 'websql', 'shadercache'],
+      }),
     getHistory: () => store.getHistory(currentProfileId),
     clearHistory: () => store.clearHistory(currentProfileId),
     deleteHistoryEntry: (index) => store.deleteHistoryEntry(currentProfileId, index),
@@ -1300,7 +1354,13 @@ function createWindow(store, opts = {}) {
 }
 
 function registerIpcHandlers(store) {
-  ipcMain.on('woowil:navigate', (event, url) => ctxFor(event)?.navigate(url));
+  // Shared by the toolbar's own address bar (preload.js) and every internal
+  // woowil:// page's search/address box (pages-preload.js, e.g. the newtab
+  // page) - the latter's sender is a tab's webContents, only registered in
+  // tabContextMap, not windowContexts, so ctxFor alone silently resolved to
+  // nothing and the newtab search box did nothing at all. Both maps point
+  // at the same per-window ctx object, so falling back to tabCtxFor is safe.
+  ipcMain.on('woowil:navigate', (event, url) => (ctxFor(event) ?? tabCtxFor(event))?.navigate(url));
   ipcMain.on('woowil:go-back', (event) => ctxFor(event)?.goBack());
   ipcMain.on('woowil:go-forward', (event) => ctxFor(event)?.goForward());
   ipcMain.on('woowil:reload', (event) => ctxFor(event)?.reload());
@@ -1338,8 +1398,11 @@ function registerIpcHandlers(store) {
   // IPC for the internal woowil:// pages (settings/history/bookmarks/
   // downloads), scoped to whichever window+profile the calling tab belongs
   // to.
+  ipcMain.handle('woowil-pages:get-version', () => app.getVersion());
   ipcMain.handle('woowil-pages:get-settings', (event) => tabCtxFor(event)?.getSettings());
   ipcMain.handle('woowil-pages:set-setting', (event, key, value) => tabCtxFor(event)?.setSetting(key, value));
+  ipcMain.handle('woowil-pages:clear-cache', (event) => tabCtxFor(event)?.clearCache());
+  ipcMain.handle('woowil-pages:clear-cookies-and-site-data', (event) => tabCtxFor(event)?.clearCookiesAndSiteData());
   ipcMain.handle('woowil-pages:get-history', (event) => tabCtxFor(event)?.getHistory() ?? []);
   ipcMain.handle('woowil-pages:clear-history', (event) => tabCtxFor(event)?.clearHistory() ?? []);
   ipcMain.handle('woowil-pages:delete-history-entry', (event, index) => tabCtxFor(event)?.deleteHistoryEntry(index) ?? []);

@@ -5,8 +5,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 // gets it, alongside its per-profile session partition).
 if (location.protocol === 'woowil:') {
   contextBridge.exposeInMainWorld('woowilPages', {
+    getVersion: () => ipcRenderer.invoke('woowil-pages:get-version'),
     getSettings: () => ipcRenderer.invoke('woowil-pages:get-settings'),
     setSetting: (key, value) => ipcRenderer.invoke('woowil-pages:set-setting', key, value),
+    clearCache: () => ipcRenderer.invoke('woowil-pages:clear-cache'),
+    clearCookiesAndSiteData: () => ipcRenderer.invoke('woowil-pages:clear-cookies-and-site-data'),
     getHistory: () => ipcRenderer.invoke('woowil-pages:get-history'),
     clearHistory: () => ipcRenderer.invoke('woowil-pages:clear-history'),
     deleteHistoryEntry: (index) => ipcRenderer.invoke('woowil-pages:delete-history-entry', index),
