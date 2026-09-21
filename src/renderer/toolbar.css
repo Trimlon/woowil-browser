@@ -274,6 +274,28 @@ body {
 .address-wrap input {
   width: 100%;
 }
+/* Higher specificity than the general `.toolbar input` rule below (which
+   sets padding: 0 8px), so the security indicator has room on the left
+   without needing !important. */
+.toolbar .address-wrap input {
+  padding-left: 26px;
+}
+.security-indicator {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+.security-indicator.secure {
+  color: #2ecc71;
+}
+.security-indicator.insecure {
+  color: #e74c3c;
+}
 
 .suggestions {
   position: absolute;

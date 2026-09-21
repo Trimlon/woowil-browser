@@ -4,6 +4,7 @@ const backButton = document.getElementById('back');
 const forwardButton = document.getElementById('forward');
 const reloadButton = document.getElementById('reload');
 const addressInput = document.getElementById('address');
+const securityIndicator = document.getElementById('security-indicator');
 const bookmarkButton = document.getElementById('bookmark');
 const bookmarksBar = document.getElementById('bookmarks-bar');
 const suggestionsBox = document.getElementById('suggestions');
@@ -101,8 +102,38 @@ addressInput.addEventListener('blur', () => {
   setTimeout(hideSuggestions, 150);
 });
 
+// A plain URL string is all the toolbar already gets for every navigation
+// (see main.js's 'address' sends) - no need for a separate IPC round trip
+// just to know the scheme.
+function updateSecurityIndicator(url) {
+  let protocol;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    securityIndicator.hidden = true;
+    return;
+  }
+  if (protocol === 'https:') {
+    securityIndicator.hidden = false;
+    securityIndicator.className = 'security-indicator secure';
+    securityIndicator.textContent = '🔒';
+    securityIndicator.title = 'Sikker forbindelse (HTTPS)';
+  } else if (protocol === 'http:') {
+    securityIndicator.hidden = false;
+    securityIndicator.className = 'security-indicator insecure';
+    securityIndicator.textContent = '⚠';
+    securityIndicator.title = 'Ikke sikker forbindelse (HTTP) — undgå at indtaste følsomme oplysninger';
+  } else {
+    // woowil://, file://, about: etc. - internal/local, not a meaningful
+    // "secure vs. not" distinction, so stay out of the way instead of
+    // showing a misleading padlock or warning.
+    securityIndicator.hidden = true;
+  }
+}
+
 window.woowil.onAddress((url) => {
   addressInput.value = url;
+  updateSecurityIndicator(url);
 });
 window.woowil.onNavState(({ canGoBack, canGoForward }) => {
   backButton.disabled = !canGoBack;
