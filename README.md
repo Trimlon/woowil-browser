@@ -181,3 +181,7 @@ En skrivebords-launcher er installeret til den aktuelle bruger:
 `~/.local/share/applications/woowil.desktop`. Den kører
 `node_modules/.bin/electron` direkte mod projektmappen, så den ikke er
 afhængig af `npm`/`npx` ved opstart.
+
+## Licens
+
+GNU General Public License v3.0 (eller senere) — se [LICENSE](LICENSE).

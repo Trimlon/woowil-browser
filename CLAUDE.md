@@ -341,9 +341,9 @@ opretter/genbruger GitHub-releasen for versionen i `package.json`.
    fil, kun gives som miljøvariabel ved kørsel.
 2. `GH_RUNTIME_TOKEN` — fine-grained PAT, **kun** "Contents: Read-only",
    scopet til **kun** `Trimlon/woowil-browser`. Bages ind i selve appen
-   (`app-update.yml`) så den kan læse releases fra det **private** repo uden
-   brugeren er logget ind. Alle der pakker appen ud kan læse denne token igen
-   — det er accepteret, fordi den kun kan læse, aldrig skrive.
+   (`app-update.yml`) så den kan læse releases uden brugeren er logget ind.
+   Alle der pakker appen ud kan læse denne token igen — det er accepteret,
+   fordi den kun kan læse, aldrig skrive.
 
 Ingen af tokens'ene er gemt noget sted i repoet eller i min hukommelse —
 brugeren har dem, og skal give dem igen hvis en ny udgivelse skal laves.
@@ -351,6 +351,16 @@ brugeren har dem, og skal give dem igen hvis en ny udgivelse skal laves.
 glemt at sætte "No expiration"/lang dato) — hvis auto-opdatering pludselig
 holder op med at virke for alle brugere på én gang, tjek om denne er udløbet
 først. Se `README.md` → "Auto-opdatering" for den fulde opsætningsguide.
+
+**Repoet blev gjort offentligt og GPL-3.0-licenseret** (brugerens eget
+bevidste valg — se `LICENSE`/`README.md` → "Licens"). `build.publish.private`
+i `package.json` er sat til `false` til at matche. `GH_RUNTIME_TOKEN` er
+teknisk set ikke længere *nødvendig* (et offentligt repos releases kan
+læses uden token), men skader ikke at blive ved med at bruge — den er
+stadig kun read-only. Fuld git-historik blev tjekket for lækkede tokens
+(`git log --all -p` grep'et for `ghp_`/`github_pat_`-mønstre) **før**
+repoet blev slået offentligt — fandt intet, men husk samme tjek hvis der
+nogensinde er tvivl om historikken igen.
 
 **Kendt miljø-kvirk (ramt flere gange)**: lange baggrundskommandoer
 (bygning + upload af 100+ MB filer tager flere minutter) bliver upålideligt

@@ -4,6 +4,7 @@
   "private": true,
   "description": "Woowil - a minimal custom browser built on Electron.",
   "author": "Trimlon",
+  "license": "GPL-3.0-or-later",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -27,7 +28,7 @@
       "provider": "github",
       "owner": "Trimlon",
       "repo": "woowil-browser",
-      "private": true
+      "private": false
     },
     "files": [
       "src/**/*",
