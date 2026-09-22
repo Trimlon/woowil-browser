@@ -199,12 +199,23 @@ installerer fra en udpakket mappe eller en .crx-/.zip-fil via
   (indlæsning, ikon i værktøjslinjen, klik åbner/lukker popup, aktiver/
   deaktiver, fjern, persistering på disk) og en standalone-test af selve
   CRX/ZIP-udpakningen (inkl. en simuleret CRX med falske header-bytes foran
-  den rigtige ZIP). **Ikke** testet: den native filvælger-dialog
-  (`dialog.showOpenDialog`) selv — samme klasse miljøbegrænsning som ramte
-  VM-testing i woowil-os-projektet (portal-baserede dialoger ser ikke ud
-  til at kunne åbne rigtigt i dette sandboxede/remote skrivebordsmiljø);
-  test dette specifikt på en rigtig maskine før det regnes for 100%
-  bekræftet end-to-end.
+  den rigtige ZIP).
+- **`dialog.showOpenDialog()` skal have et vindue som første argument, eller
+  crasher appen på rigtig hardware** — fundet efter v0.2.0 var udgivet: den
+  native filvælger-dialog kunne slet ikke testes i dette projekts eget
+  sandboxede/remote skrivebordsmiljø (samme miljøbegrænsning som ramte
+  VM-testing i woowil-os — portal-baserede dialoger ser ikke ud til at
+  kunne åbne rigtigt der; kaldet hang bare, uden fejl), så det blev udgivet
+  utestet. Brugeren rapporterede et rigtigt crash på egen maskine.
+  `src/main.js` havde allerede et velfungerende eksempel at sammenligne
+  med (`dialog.showSaveDialog(win, {...})`, brugt til "udskriv til PDF")
+  — det ENESTE der manglede i de to nye `dialog.showOpenDialog(...)`-kald
+  var selve `win`-argumentet, som i denne apps helt igennem
+  `BaseWindow`-baserede arkitektur er langt fra "optional" i praksis, uanset
+  hvad Electrons egen dokumentation antyder. **Enhver ny `dialog.*`-brug
+  skal altid have `ctx.win` (eller det tilsvarende vindue) som første
+  argument** — spring det aldrig over, selv når det ser ud til at virke i
+  test.
 
 ## Filoversigt
 

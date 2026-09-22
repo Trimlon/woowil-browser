@@ -1824,7 +1824,16 @@ function registerIpcHandlers(store) {
     if (!ctx) {
       return { extensions: [] };
     }
-    const result = await dialog.showOpenDialog({
+    // A parent window is not optional here in practice: leaving it out
+    // crashed the app on real hardware (this app has no BrowserWindow
+    // instances anywhere, only BaseWindow — dialog.showOpenDialog() with no
+    // window argument apparently can't cope with that combination, even
+    // though it merely hung, rather than crashing, in this project's own
+    // dev sandbox). The existing dialog.showSaveDialog(win, ...) call
+    // below (for "print to PDF") already passes its BaseWindow this way
+    // and has never had this problem — matching that is the fix, not
+    // something dialog.showOpenDialog specifically needed.
+    const result = await dialog.showOpenDialog(ctx.win, {
       properties: ['openDirectory'],
       title: 'Vælg en udpakket udvidelses-mappe',
     });
@@ -1842,7 +1851,7 @@ function registerIpcHandlers(store) {
     if (!ctx) {
       return { extensions: [] };
     }
-    const result = await dialog.showOpenDialog({
+    const result = await dialog.showOpenDialog(ctx.win, {
       properties: ['openFile'],
       title: 'Vælg en .crx- eller .zip-udvidelse',
       filters: [{ name: 'Chrome-udvidelse', extensions: ['crx', 'zip'] }],
