@@ -57,6 +57,34 @@
         cursor: pointer;
         font-size: 14px;
       }
+      .webstore-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 0.8rem;
+      }
+      .webstore-row input {
+        flex: 1;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--input-bg);
+        color: var(--text);
+        font-size: 14px;
+      }
+      .webstore-row button {
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      .webstore-row button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
       .error {
         color: #c0392b;
         font-size: 13px;
@@ -164,10 +192,16 @@
   <body>
     <h1>Udvidelser</h1>
     <p class="hint">
-      Woowil understøtter Chrome-udvidelser, men har ikke adgang til selve Chrome Web Store — du skal hente
-      udvidelsen som en fil først (en udpakket mappe, eller en .crx-/.zip-fil), og installere den herfra.
+      "Tilføj til Chrome"-knappen på selve Chrome Web Store-siden virker ikke i Woowil — indsæt i stedet linket til
+      udvidelsen (eller bare id'et fra linket) herunder, så henter Woowil den direkte.
     </p>
 
+    <div class="webstore-row">
+      <input id="webstore-input" type="text" placeholder="Link til Chrome Web Store, eller udvidelsens id" />
+      <button id="install-webstore" type="button">Installer</button>
+    </div>
+
+    <p class="hint" style="margin-top: 1rem">Eller installer en fil du allerede har liggende:</p>
     <div class="install-actions">
       <button id="install-folder" type="button">Installer fra mappe (udpakket)</button>
       <button id="install-file" type="button">Installer fra .crx/.zip-fil</button>
@@ -179,6 +213,8 @@
     <script>
       const installFolderBtn = document.getElementById('install-folder');
       const installFileBtn = document.getElementById('install-file');
+      const installWebStoreBtn = document.getElementById('install-webstore');
+      const webStoreInput = document.getElementById('webstore-input');
       const errorEl = document.getElementById('error');
       const listEl = document.getElementById('extension-list');
 
@@ -277,6 +313,28 @@
         installFileBtn.disabled = false;
         showError(result.error);
         renderExtensions(result.extensions);
+      });
+
+      async function installFromWebStore() {
+        const input = webStoreInput.value.trim();
+        if (!input) {
+          return;
+        }
+        installWebStoreBtn.disabled = true;
+        showError(null);
+        const result = await window.woowilPages.installExtensionWebStore(input);
+        installWebStoreBtn.disabled = false;
+        showError(result.error);
+        renderExtensions(result.extensions);
+        if (!result.error) {
+          webStoreInput.value = '';
+        }
+      }
+      installWebStoreBtn.addEventListener('click', installFromWebStore);
+      webStoreInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          installFromWebStore();
+        }
       });
     </script>
   </body>

@@ -46,6 +46,7 @@ const {
   clipboard,
 } = require('electron');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { autoUpdater } = require('electron-updater');
@@ -298,6 +299,27 @@ function extensionPopupPath(manifest) {
   );
 }
 
+// Extensions that ship translations (Bitwarden included) put a literal
+// "__MSG_extName__"-style placeholder in manifest.json's own name field
+// instead of the real name, resolved at install time in real Chrome via
+// _locales/<default_locale>/messages.json — we read manifest.json directly
+// everywhere, so without this every such extension would show its raw
+// placeholder string as its name.
+function resolveManifestName(extensionPath, manifest) {
+  const raw = manifest.name || '';
+  const match = /^__MSG_(\w+)__$/.exec(raw);
+  if (!match || !manifest.default_locale) {
+    return raw;
+  }
+  try {
+    const messagesPath = path.join(extensionPath, '_locales', manifest.default_locale, 'messages.json');
+    const messages = JSON.parse(fs.readFileSync(messagesPath, 'utf8'));
+    return messages[match[1]]?.message || raw;
+  } catch {
+    return raw;
+  }
+}
+
 function extensionMetadata(extension) {
   const manifest = extension.manifest || {};
   const popupPath = extensionPopupPath(manifest);
@@ -308,7 +330,7 @@ function extensionMetadata(extension) {
     // nothing nested any deeper — so the folder name Electron reports back
     // here is always exactly the storageId we persisted it under.
     storageId: path.basename(extension.path),
-    name: manifest.name || extension.id,
+    name: resolveManifestName(extension.path, manifest) || extension.id,
     version: manifest.version || '',
     icon: extensionIconDataUrl(extension.path, manifest),
     hasPopup: Boolean(popupPath),
@@ -415,6 +437,47 @@ function extractExtensionArchive(filePath, destDir) {
   }
   const zip = new AdmZip(buffer.subarray(zipStart));
   zip.extractAllTo(destDir, true);
+}
+
+// Chrome extension ids are always 32 lowercase letters a-p (base16 using
+// a-p in place of 0-9a-f) - accept either a bare id or a pasted Chrome Web
+// Store URL (both the current chromewebstore.google.com and the older
+// chrome.google.com/webstore hosts use the same /detail/<name>/<id> shape).
+const WEBSTORE_ID_RE = /^[a-p]{32}$/;
+function parseWebStoreExtensionId(input) {
+  const trimmed = (input || '').trim();
+  if (WEBSTORE_ID_RE.test(trimmed)) {
+    return trimmed;
+  }
+  const match = /(?:chromewebstore\.google\.com\/detail|chrome\.google\.com\/webstore\/detail)\/[^/?#]+\/([a-p]{32})/.exec(
+    trimmed
+  );
+  return match ? match[1] : null;
+}
+
+// The Chrome Web Store's own "Tilføj til Chrome" button never works here -
+// Electron half-registers chrome.webstorePrivate (see the v0.2.3 crash fix
+// above) but never implements the actual install call, by design; that's
+// not something an app can work around. This talks to the exact same crx
+// download endpoint Chrome's own internal extension updater uses (no
+// scraping, no private API - it's Google's public update-check service),
+// so it works regardless of what the store page's own JS thinks this
+// browser is. Confirmed against the real Bitwarden crx before wiring this
+// up: valid CRX3, extracts cleanly through the existing
+// extractExtensionArchive() below.
+const WEBSTORE_CRX_CHROME_VERSION = '131.0.0.0';
+async function downloadWebStoreCrx(extensionId) {
+  const url =
+    'https://clients2.google.com/service/update2/crx?response=redirect&acceptformat=crx2,crx3&prodversion=' +
+    WEBSTORE_CRX_CHROME_VERSION +
+    '&x=id%3D' +
+    extensionId +
+    '%26uc';
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Kunne ikke hente udvidelsen fra Chrome Web Store (HTTP ${res.status}).`);
+  }
+  return Buffer.from(await res.arrayBuffer());
 }
 
 // event.sender -> window context, so the one-time IPC handlers below know
@@ -997,7 +1060,7 @@ function createWindow(store, opts = {}) {
         return {
           storageId: entry.storageId,
           enabled: entry.enabled,
-          name: manifest.name || entry.storageId,
+          name: resolveManifestName(extPath, manifest) || entry.storageId,
           version: manifest.version || '',
           icon: extensionIconDataUrl(extPath, manifest),
         };
@@ -1063,6 +1126,32 @@ function createWindow(store, opts = {}) {
     }
     store.addExtensionEntry(currentProfileId, storageId);
     return getExtensionsPage();
+  }
+
+  // The Chrome Web Store's own "Tilføj til Chrome" button doesn't work in
+  // this app (see downloadWebStoreCrx above) - this is the actual install
+  // path: fetch the extension's real .crx directly from Google's update
+  // service, then hand it to installExtensionFromArchive exactly like a
+  // manually-picked file, so it goes through the same validation/flatten/
+  // load logic either way.
+  async function installExtensionFromWebStore(input) {
+    if (incognito) {
+      throw new Error('Udvidelser kan ikke installeres i et privat vindue — skift til et almindeligt vindue.');
+    }
+    const extensionId = parseWebStoreExtensionId(input);
+    if (!extensionId) {
+      throw new Error(
+        "Kunne ikke genkende et udvidelses-id — indsæt enten selve id'et (32 bogstaver) eller linket til siden på Chrome Web Store."
+      );
+    }
+    const buffer = await downloadWebStoreCrx(extensionId);
+    const tempPath = path.join(os.tmpdir(), `woowil-webstore-${extensionId}-${Date.now()}.crx`);
+    fs.writeFileSync(tempPath, buffer);
+    try {
+      return await installExtensionFromArchive(tempPath);
+    } finally {
+      fs.rmSync(tempPath, { force: true });
+    }
   }
 
   function findLoadedRuntimeId(storageId) {
@@ -1736,6 +1825,7 @@ function createWindow(store, opts = {}) {
     getExtensionsPage,
     installExtensionFromDirectory,
     installExtensionFromArchive,
+    installExtensionFromWebStore,
     removeExtensionPage,
     setExtensionEnabledPage,
   };
@@ -1874,6 +1964,17 @@ function registerIpcHandlers(store) {
     }
     try {
       return { extensions: await ctx.installExtensionFromArchive(result.filePaths[0]) };
+    } catch (err) {
+      return { error: err.message, extensions: ctx.getExtensionsPage() };
+    }
+  });
+  ipcMain.handle('woowil-pages:install-extension-webstore', async (event, input) => {
+    const ctx = tabCtxFor(event);
+    if (!ctx) {
+      return { extensions: [] };
+    }
+    try {
+      return { extensions: await ctx.installExtensionFromWebStore(input) };
     } catch (err) {
       return { error: err.message, extensions: ctx.getExtensionsPage() };
     }

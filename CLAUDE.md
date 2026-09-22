@@ -277,6 +277,36 @@ installerer fra en udpakket mappe eller en .crx-/.zip-fil via
   gentagne crash-rapporter — hold det adskilt i hovedet fra
   webstorePrivate-fejlen ovenfor, hvis der nogensinde dukker endnu et
   `dialog.*`-relateret crash op.
+- **Chrome Web Stores egen "Tilføj til Chrome"-knap kan aldrig komme til at
+  virke i denne app, crash eller ej** — selv efter v0.2.3-fixet ovenfor
+  (som kun forhindrer at et stray `chrome.webstorePrivate`-kald crasher
+  browser-processen) er `chrome.webstorePrivate` stadig fuldstændig
+  ikke-implementeret i Electron: siden kalder nu bare ind i en stub der
+  svarer med en fejl i stedet for at installere noget. Det er en bevidst
+  Electron-arkitekturbeslutning, ikke noget der kan rettes fra appens side.
+  Løsning: `installExtensionFromWebStore(input)` i `main.js` — brugeren
+  indsætter et Chrome Web Store-link (eller bare id'et) i et nyt felt på
+  `woowil://extensions`, og vi henter selve `.crx`-filen direkte fra
+  Googles offentlige opdaterings-endpoint
+  (`clients2.google.com/service/update2/crx?...`) — samme endpoint en
+  rigtig installeret Chrome selv bruger til at opdatere udvidelser, ikke
+  scraping eller en privat API. Verificeret direkte mod den rigtige
+  Bitwarden-udvidelse (23 MB, gyldig CRX3, udpakkes korrekt gennem den
+  eksisterende `extractExtensionArchive()`). Genbruger
+  `installExtensionFromArchive()` internt (skriver de hentede bytes til en
+  midlertidig fil i `os.tmpdir()`, kalder den eksisterende
+  fil-installations-vej, rydder den midlertidige fil op bagefter) —ingen
+  duplikeret install-/valideringslogik.
+- **`resolveManifestName()`** (ny hjælpefunktion, bruges alle steder et
+  udvidelsesnavn vises) — nogle udvidelser (Bitwarden inklusiv) sætter
+  `manifest.json`'s `name`-felt til en bogstavelig `__MSG_xxx__`-placeholder
+  og forventer at en rigtig Chrome slår den op i
+  `_locales/<default_locale>/messages.json`. Uden dette ville sådan en
+  udvidelse vise `__MSG_extName__` som sit navn i UI'en i stedet for
+  "Bitwarden Password Manager" — fundet ved at teste den rigtige
+  Bitwarden-crx, ikke noget der var synligt med den tidligere
+  minimale MV2-testudvidelse.
+- Udgivet som v0.2.4.
 
 ## Filoversigt
 
