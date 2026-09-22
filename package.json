@@ -1,6 +1,6 @@
 {
   "name": "woowil",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "description": "Woowil - a minimal custom browser built on Electron.",
   "author": "Trimlon",
@@ -39,7 +39,8 @@
         "AppImage"
       ],
       "icon": "assets/icon.png",
-      "category": "Network"
+      "category": "Network",
+      "artifactName": "${productName}.${ext}"
     },
     "win": {
       "target": [

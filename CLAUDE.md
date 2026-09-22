@@ -375,6 +375,26 @@ ingenting", er det første mistænkte altid dette, ikke en bug i appen.
 installeret som standard) — `sudo pacman -S fuse2`, eller kør med
 `--appimage-extract-and-run` som workaround.
 
+**AppImage-artefaktet hedder bevidst `Woowil.AppImage`, ikke
+`Woowil-${version}.AppImage`** (sat via `build.linux.artifactName` i
+`package.json`) — electron-builders standardnavn INKLUDERER versionen, men
+det ødelægger auto-opdatering i praksis. Fundet ved at læse
+`electron-updater`s egen kilde (`AppImageUpdater.js`, `doInstall()`) efter
+brugeren rapporterede at deres skrivebords-genvej døde ved hver
+opdatering: hvis filnavnet på den kørende AppImage matcher `\d+\.\d+\.\d+`,
+sletter opdateringen den GAMLE fil og opretter en NY med det nye
+versionsnummer i navnet i stedet for at overskrive samme sti — enhver
+genvej der peger på det gamle filnavn er død i samme øjeblik. Med et
+versionsløst navn overskriver `autoUpdater.quitAndInstall()` altid præcis
+samme fil/sti, for evigt. Bagside: GitHub-assetet hedder nu det samme
+(`Woowil.AppImage`) for hver eneste release — versionen kan stadig ses på
+selve release-siden/taggen, bare ikke i filnavnet man downloader.
+**Woowil OS's eget `woowil-install-own-browser.sh` (i `woowil-os`-repoet)
+har en `ls .../Woowil-*.AppImage`-glob der forudsætter det GAMLE,
+versionerede navn** — det skal opdateres/omgås når/hvis en fremtidig
+browser-opdatering skal staged ind i en ny woowil-os ISO, ellers matcher
+globen ingenting.
+
 ## Sådan blev appen testet under udvikling (ingen `xdotool`/`wmctrl` installeret)
 
 - `python3-xlib`-scripts til klik/tastatur (`Xlib.ext.xtest.fake_input`) og
