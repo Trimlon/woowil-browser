@@ -211,6 +211,47 @@ class ProfileStore {
   setWorkspaceState(id, state) {
     writeJSON(path.join(this.profileDir(id), 'workspaces.json'), state);
   }
+
+  // Extensions are per-profile, matching Chrome's own model and this
+  // project's existing per-profile session partitions. `extensionsDir`
+  // holds one unpacked-extension folder per installed extension, named by
+  // `storageId` — a UUID this project generates at install time, NOT
+  // Chromium's own derived extension id (main.js keeps its own separate
+  // runtime-id<->storageId mapping; see extensionMetadata() there for why).
+  // extensions.json is just the list of {storageId, enabled} — everything
+  // else (name, version, icon, popup) is read fresh from each extension's
+  // own manifest.json when needed, never duplicated into this list.
+  extensionsDir(id) {
+    return path.join(this.profileDir(id), 'extensions');
+  }
+
+  getExtensionEntries(id) {
+    return readJSON(path.join(this.profileDir(id), 'extensions.json'), []);
+  }
+
+  addExtensionEntry(id, storageId) {
+    const entries = this.getExtensionEntries(id).filter((entry) => entry.storageId !== storageId);
+    entries.push({ storageId, enabled: true });
+    writeJSON(path.join(this.profileDir(id), 'extensions.json'), entries);
+    return entries;
+  }
+
+  removeExtensionEntry(id, storageId) {
+    const entries = this.getExtensionEntries(id).filter((entry) => entry.storageId !== storageId);
+    writeJSON(path.join(this.profileDir(id), 'extensions.json'), entries);
+    fs.rmSync(path.join(this.extensionsDir(id), storageId), { recursive: true, force: true });
+    return entries;
+  }
+
+  setExtensionEnabled(id, storageId, enabled) {
+    const entries = this.getExtensionEntries(id);
+    const entry = entries.find((e) => e.storageId === storageId);
+    if (entry) {
+      entry.enabled = enabled;
+      writeJSON(path.join(this.profileDir(id), 'extensions.json'), entries);
+    }
+    return entries;
+  }
 }
 
 module.exports = { ProfileStore };

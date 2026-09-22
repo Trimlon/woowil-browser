@@ -27,5 +27,11 @@ if (location.protocol === 'woowil:') {
     navigate: (url) => ipcRenderer.send('woowil:navigate', url),
     onThemeChange: (callback) =>
       ipcRenderer.on('woowil-theme-changed', (_event, theme) => callback(theme)),
+    getExtensions: () => ipcRenderer.invoke('woowil-pages:get-extensions'),
+    installExtensionFolder: () => ipcRenderer.invoke('woowil-pages:install-extension-folder'),
+    installExtensionFile: () => ipcRenderer.invoke('woowil-pages:install-extension-file'),
+    removeExtension: (storageId) => ipcRenderer.invoke('woowil-pages:remove-extension', storageId),
+    setExtensionEnabled: (storageId, enabled) =>
+      ipcRenderer.invoke('woowil-pages:set-extension-enabled', storageId, enabled),
   });
 }

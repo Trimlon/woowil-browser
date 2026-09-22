@@ -9,6 +9,7 @@ const bookmarkButton = document.getElementById('bookmark');
 const bookmarksBar = document.getElementById('bookmarks-bar');
 const suggestionsBox = document.getElementById('suggestions');
 const zoomIndicator = document.getElementById('zoom-indicator');
+const extensionsBar = document.getElementById('extensions-bar');
 const downloadsButton = document.getElementById('downloads-button');
 const downloadsBadge = document.getElementById('downloads-badge');
 const incognitoBadge = document.getElementById('incognito-badge');
@@ -363,6 +364,43 @@ window.woowil.onZoomChanged((percent) => {
   zoomIndicator.hidden = false;
   zoomIndicator.textContent = percent + '%';
 });
+
+// -- Extensions -------------------------------------------------------------
+//
+// One button per loaded (enabled) extension, rendered here in the toolbar
+// itself since there's no such thing as a native Chrome toolbar in this
+// app — the button's own icon comes straight from main.js as a data: URL
+// (no chrome-extension:// fetch needed in this renderer, which never has
+// that scheme's origin). A click only ever tells main.js the extension's
+// id and this button's own on-screen position; main.js decides whether
+// that extension has a popup to show and, if so, creates and positions a
+// separate WebContentsView for it — this renderer has no chrome-extension://
+// content of its own to embed.
+function renderExtensions(extensions) {
+  extensionsBar.innerHTML = '';
+  for (const ext of extensions || []) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = ext.name;
+    if (ext.icon) {
+      btn.className = 'extension-btn';
+      const img = document.createElement('img');
+      img.src = ext.icon;
+      img.alt = '';
+      btn.appendChild(img);
+    } else {
+      btn.className = 'extension-btn no-icon';
+      btn.textContent = '🧩';
+    }
+    btn.addEventListener('click', () => {
+      const rect = btn.getBoundingClientRect();
+      window.woowil.extensionAction(ext.id, { left: rect.left, right: rect.right, bottom: rect.bottom });
+    });
+    extensionsBar.appendChild(btn);
+  }
+}
+
+window.woowil.onExtensions(renderExtensions);
 
 // -- Downloads ------------------------------------------------------------
 

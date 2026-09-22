@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <title>Udvidelser</title>
+    <style>
+      :root {
+        --bg: #f7f7fb;
+        --bg-elevated: #ffffff;
+        --text: #1b1b1f;
+        --text-secondary: #55525f;
+        --border: #ddd9e6;
+        --input-bg: #ffffff;
+        --accent: #9a29d6;
+        --accent2: #17aee0;
+      }
+      :root[data-theme='dark'] {
+        --bg: #14121b;
+        --bg-elevated: #1e1b29;
+        --text: #f2eefc;
+        --text-secondary: #b8b0cc;
+        --border: #34304a;
+        --input-bg: #241f33;
+        --accent: #d03cff;
+        --accent2: #24d8ff;
+      }
+
+      body {
+        font-family: sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        max-width: 640px;
+        margin: 3rem auto;
+        padding: 0 1rem;
+        transition: background 0.2s, color 0.2s;
+      }
+      h1 {
+        font-size: 1.4rem;
+      }
+      .hint {
+        color: var(--text-secondary);
+        font-size: 13px;
+        margin-top: 0.3rem;
+      }
+      .install-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 1.2rem;
+      }
+      .install-actions button {
+        flex: 1;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg-elevated);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 14px;
+      }
+      .error {
+        color: #c0392b;
+        font-size: 13px;
+        margin-top: 0.6rem;
+      }
+      .error.hidden {
+        display: none;
+      }
+      .extension-list {
+        margin-top: 2rem;
+      }
+      .extension-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-elevated);
+        margin-bottom: 10px;
+      }
+      .extension-item.disabled {
+        opacity: 0.55;
+      }
+      .extension-icon {
+        width: 32px;
+        height: 32px;
+        flex-shrink: 0;
+        border-radius: 4px;
+        object-fit: contain;
+        background: var(--input-bg);
+      }
+      .extension-info {
+        flex: 1;
+        min-width: 0;
+      }
+      .extension-name {
+        font-weight: 600;
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .extension-version {
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+      .extension-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+      }
+      .switch {
+        position: relative;
+        width: 38px;
+        height: 22px;
+        flex-shrink: 0;
+      }
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .switch-track {
+        position: absolute;
+        inset: 0;
+        background: var(--border);
+        border-radius: 22px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .switch-track::before {
+        content: '';
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        left: 3px;
+        top: 3px;
+        background: white;
+        border-radius: 50%;
+        transition: transform 0.15s;
+      }
+      .switch input:checked + .switch-track {
+        background: var(--accent);
+      }
+      .switch input:checked + .switch-track::before {
+        transform: translateX(16px);
+      }
+      .remove-btn {
+        border: none;
+        background: none;
+        color: #c0392b;
+        cursor: pointer;
+        font-size: 13px;
+        padding: 4px 6px;
+      }
+      .empty-hint {
+        color: var(--text-secondary);
+        font-size: 14px;
+        margin-top: 1.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Udvidelser</h1>
+    <p class="hint">
+      Woowil understøtter Chrome-udvidelser, men har ikke adgang til selve Chrome Web Store — du skal hente
+      udvidelsen som en fil først (en udpakket mappe, eller en .crx-/.zip-fil), og installere den herfra.
+    </p>
+
+    <div class="install-actions">
+      <button id="install-folder" type="button">Installer fra mappe (udpakket)</button>
+      <button id="install-file" type="button">Installer fra .crx/.zip-fil</button>
+    </div>
+    <p class="error hidden" id="error"></p>
+
+    <div class="extension-list" id="extension-list"></div>
+
+    <script>
+      const installFolderBtn = document.getElementById('install-folder');
+      const installFileBtn = document.getElementById('install-file');
+      const errorEl = document.getElementById('error');
+      const listEl = document.getElementById('extension-list');
+
+      function showError(message) {
+        if (message) {
+          errorEl.textContent = message;
+          errorEl.classList.remove('hidden');
+        } else {
+          errorEl.classList.add('hidden');
+        }
+      }
+
+      function applyTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+      }
+      window.woowilPages.getSettings().then((settings) => applyTheme(settings.theme));
+      window.woowilPages.onThemeChange(applyTheme);
+
+      function renderExtensions(extensions) {
+        listEl.innerHTML = '';
+        if (!extensions || extensions.length === 0) {
+          listEl.innerHTML = '<p class="empty-hint">Ingen udvidelser installeret endnu.</p>';
+          return;
+        }
+        for (const ext of extensions) {
+          const item = document.createElement('div');
+          item.className = 'extension-item' + (ext.enabled ? '' : ' disabled');
+
+          const icon = document.createElement('img');
+          icon.className = 'extension-icon';
+          icon.src = ext.icon || '';
+          icon.alt = '';
+          item.appendChild(icon);
+
+          const info = document.createElement('div');
+          info.className = 'extension-info';
+          const name = document.createElement('div');
+          name.className = 'extension-name';
+          name.textContent = ext.name;
+          const version = document.createElement('div');
+          version.className = 'extension-version';
+          version.textContent = ext.version ? 'v' + ext.version : '';
+          info.append(name, version);
+          item.appendChild(info);
+
+          const actions = document.createElement('div');
+          actions.className = 'extension-actions';
+
+          const switchLabel = document.createElement('label');
+          switchLabel.className = 'switch';
+          const switchInput = document.createElement('input');
+          switchInput.type = 'checkbox';
+          switchInput.checked = ext.enabled;
+          switchInput.addEventListener('change', async () => {
+            const result = await window.woowilPages.setExtensionEnabled(ext.storageId, switchInput.checked);
+            renderExtensions(result);
+          });
+          const switchTrack = document.createElement('span');
+          switchTrack.className = 'switch-track';
+          switchLabel.append(switchInput, switchTrack);
+          actions.appendChild(switchLabel);
+
+          const removeBtn = document.createElement('button');
+          removeBtn.className = 'remove-btn';
+          removeBtn.type = 'button';
+          removeBtn.textContent = 'Fjern';
+          removeBtn.addEventListener('click', async () => {
+            if (!confirm(`Fjern "${ext.name}"?`)) {
+              return;
+            }
+            const result = await window.woowilPages.removeExtension(ext.storageId);
+            renderExtensions(result);
+          });
+          actions.appendChild(removeBtn);
+
+          item.appendChild(actions);
+          listEl.appendChild(item);
+        }
+      }
+
+      window.woowilPages.getExtensions().then(renderExtensions);
+
+      installFolderBtn.addEventListener('click', async () => {
+        installFolderBtn.disabled = true;
+        showError(null);
+        const result = await window.woowilPages.installExtensionFolder();
+        installFolderBtn.disabled = false;
+        showError(result.error);
+        renderExtensions(result.extensions);
+      });
+
+      installFileBtn.addEventListener('click', async () => {
+        installFileBtn.disabled = true;
+        showError(null);
+        const result = await window.woowilPages.installExtensionFile();
+        installFileBtn.disabled = false;
+        showError(result.error);
+        renderExtensions(result.extensions);
+      });
+    </script>
+  </body>
+</html>

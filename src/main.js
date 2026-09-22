@@ -36,6 +36,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { autoUpdater } = require('electron-updater');
+const AdmZip = require('adm-zip');
 const { ProfileStore } = require('./profile-store');
 
 // A plain browser window has no use for Electron's default File/Edit/View
@@ -56,7 +57,6 @@ const PERMISSION_BAR_HEIGHT = 40;
 const UPDATE_BAR_HEIGHT = 40;
 
 // Trim subsystems a minimal single-window browser has no use for.
-app.commandLine.appendSwitch('disable-extensions');
 app.commandLine.appendSwitch('disable-background-networking');
 app.commandLine.appendSwitch('disable-sync');
 app.commandLine.appendSwitch('disable-translate');
@@ -155,7 +155,7 @@ const MIME_TYPES = {
 // by navigating a tab there — no exploit chain needed) escapes the pages/
 // directory entirely and serves the app's own source files as a "woowil:"
 // origin, which pages-preload.js otherwise trusts unconditionally.
-const KNOWN_PAGES = new Set(['newtab', 'settings', 'history', 'bookmarks', 'downloads']);
+const KNOWN_PAGES = new Set(['newtab', 'settings', 'history', 'bookmarks', 'downloads', 'extensions']);
 
 function servePage(request) {
   const url = new URL(request.url);
@@ -226,6 +226,182 @@ function ensureAdBlockHandled(partition, profileId, store) {
     }
     callback({});
   });
+}
+
+// --- Chrome extensions ---
+//
+// Per-profile, matching Chrome's own model and this project's existing
+// per-profile session partitions (rather than one global set for every
+// profile). Each installed extension is an unpacked directory under
+// store.extensionsDir(profileId)/<extensionId>/ (a real Chrome extension
+// folder — manifest.json + whatever else the extension ships); the only
+// thing this project persists itself is *which* extension ids are
+// installed and whether each is currently enabled
+// (profile.extensionsDir()'s neighbour extensions.json) — name, version,
+// icon and popup path are always read fresh from each extension's own
+// manifest via session's 'extension-loaded' event, never duplicated.
+const EXTENSION_ICON_SIZES = [32, 24, 16, 48, 128, 64, 96];
+
+function pickExtensionIcon(manifest) {
+  const iconsSource =
+    (manifest.action && manifest.action.default_icon) ||
+    (manifest.browser_action && manifest.browser_action.default_icon) ||
+    manifest.icons;
+  if (!iconsSource) {
+    return null;
+  }
+  if (typeof iconsSource === 'string') {
+    return iconsSource;
+  }
+  for (const size of EXTENSION_ICON_SIZES) {
+    if (iconsSource[size]) {
+      return iconsSource[size];
+    }
+  }
+  const values = Object.values(iconsSource);
+  return values.length > 0 ? values[0] : null;
+}
+
+function extensionIconDataUrl(extensionPath, manifest) {
+  const iconRelative = pickExtensionIcon(manifest);
+  if (!iconRelative) {
+    return null;
+  }
+  try {
+    const iconPath = path.join(extensionPath, iconRelative);
+    const ext = path.extname(iconPath).slice(1).toLowerCase();
+    const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png';
+    return `data:${mime};base64,${fs.readFileSync(iconPath).toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+function extensionPopupPath(manifest) {
+  return (
+    (manifest.action && manifest.action.default_popup) ||
+    (manifest.browser_action && manifest.browser_action.default_popup) ||
+    null
+  );
+}
+
+function extensionMetadata(extension) {
+  const manifest = extension.manifest || {};
+  const popupPath = extensionPopupPath(manifest);
+  return {
+    id: extension.id,
+    // Every install path in this file (directory, .crx/.zip) writes the
+    // extension straight into store.extensionsDir()/<storageId>/ with
+    // nothing nested any deeper — so the folder name Electron reports back
+    // here is always exactly the storageId we persisted it under.
+    storageId: path.basename(extension.path),
+    name: manifest.name || extension.id,
+    version: manifest.version || '',
+    icon: extensionIconDataUrl(extension.path, manifest),
+    hasPopup: Boolean(popupPath),
+    popupPath,
+  };
+}
+
+// partition -> Map(extensionId -> metadata), kept live via the session's
+// own 'extension-loaded'/'extension-unloaded' events rather than tracked
+// by hand at every call site that might change it.
+const loadedExtensionsByPartition = new Map();
+
+function broadcastExtensionsForPartition(partition) {
+  for (const ctx of windowContexts.values()) {
+    ctx.refreshExtensionsForPartition?.(partition);
+  }
+}
+
+// Only wires up the session's extension-loaded/-unloaded listeners and
+// kicks off loading once per partition (mirrors ensureAdBlockHandled/
+// ensureDownloadsHandled above) — loadExtension() is async and failures on
+// one extension must never stop the rest from loading, so each is
+// awaited/caught independently rather than as a batch.
+const extensionsHandledPartitions = new Set();
+function ensureExtensionsHandled(partition, profileId, store) {
+  if (extensionsHandledPartitions.has(partition)) {
+    return;
+  }
+  // Matches real Chrome's own default (extensions don't run in incognito
+  // unless the user explicitly opts one in — not offered here at all, see
+  // "not implemented yet") — and not just a nicety: incognito's partition
+  // has no `persist:` prefix by design (see incognitoPartition above), and
+  // Electron flatly refuses to load extensions into a non-persistent
+  // session at all ("Extensions cannot be loaded in a temporary session",
+  // confirmed against a real minimal repro before wiring this up).
+  if (!partition.startsWith('persist:')) {
+    extensionsHandledPartitions.add(partition);
+    loadedExtensionsByPartition.set(partition, new Map());
+    return;
+  }
+  extensionsHandledPartitions.add(partition);
+  // session.loadExtension()/.removeExtension()/'extension-loaded' directly
+  // on the session are all deprecated as of this Electron version in
+  // favour of session.extensions.* — confirmed the whole surface used here
+  // (loadExtension, removeExtension, getAllExtensions, the loaded/unloaded
+  // events) exists and works under .extensions with a standalone sanity
+  // script before wiring this up for real.
+  const extensions = session.fromPartition(partition).extensions;
+  const extMap = new Map();
+  loadedExtensionsByPartition.set(partition, extMap);
+
+  extensions.on('extension-loaded', (_event, extension) => {
+    extMap.set(extension.id, extensionMetadata(extension));
+    broadcastExtensionsForPartition(partition);
+  });
+  extensions.on('extension-unloaded', (_event, extension) => {
+    extMap.delete(extension.id);
+    broadcastExtensionsForPartition(partition);
+  });
+
+  for (const entry of store.getExtensionEntries(profileId)) {
+    if (!entry.enabled) {
+      continue;
+    }
+    const extPath = path.join(store.extensionsDir(profileId), entry.storageId);
+    extensions.loadExtension(extPath, { allowFileAccess: true }).catch((err) => {
+      console.error(`Kunne ikke indlæse udvidelse ${entry.storageId}:`, err);
+    });
+  }
+}
+
+// Re-loading an already-loaded extension (after install/enable) needs the
+// session it's actually attached to, which ensureExtensionsHandled above
+// already created — never call session.fromPartition fresh here, or a
+// brand about-to-be-created session would miss the extension-loaded
+// listener entirely.
+async function loadOneExtension(partition, extensionPath) {
+  return session.fromPartition(partition).extensions.loadExtension(extensionPath, { allowFileAccess: true });
+}
+
+function unloadOneExtension(partition, extensionId) {
+  try {
+    session.fromPartition(partition).extensions.removeExtension(extensionId);
+  } catch {
+    // Already unloaded (or never loaded, e.g. it was disabled) — fine.
+  }
+}
+
+// A CRX3 file is a small binary header (magic "Cr24", a protobuf-encoded
+// header with the extension's signature) followed directly by a plain ZIP
+// archive - parsing the protobuf header properly would need a dependency
+// just for this one field we don't even need (the extension's declared
+// id/key). The actual payload boundary is trivially found instead: ZIP's
+// own local-file-header magic (`PK\x03\x04`) is unambiguous enough in
+// practice to just search for the first occurrence and slice from there.
+// Plain .zip exports of an unpacked extension (e.g. zipped by hand) start
+// with that same magic at offset 0, so this handles both cases uniformly.
+function extractExtensionArchive(filePath, destDir) {
+  const buffer = fs.readFileSync(filePath);
+  const zipMagic = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+  const zipStart = buffer.indexOf(zipMagic);
+  if (zipStart === -1) {
+    throw new Error('Filen ligner hverken en .crx- eller .zip-udvidelse.');
+  }
+  const zip = new AdmZip(buffer.subarray(zipStart));
+  zip.extractAllTo(destDir, true);
 }
 
 // event.sender -> window context, so the one-time IPC handlers below know
@@ -323,6 +499,11 @@ function createWindow(store, opts = {}) {
   let pushExtra = 0;
   let floatExtra = 0;
   let pendingPermission = null;
+  // The currently-shown extension popup (chrome-extension://<id>/popup.html
+  // in its own WebContentsView, positioned under the toolbar button that
+  // opened it) — see extensionAction() below. null when none is open.
+  let extensionPopupView = null;
+  let extensionPopupOwnerId = null;
   const closedTabs = [];
   const downloads = incognito ? [] : store.getDownloads(currentProfileId);
   const activeDownloadItems = new Map();
@@ -704,6 +885,213 @@ function createWindow(store, opts = {}) {
     toolbar.webContents.send('permission-request', null);
   }
 
+  function currentPartition() {
+    return incognito ? incognitoPartition : 'persist:profile-' + currentProfileId;
+  }
+
+  function sendExtensions() {
+    const extMap = loadedExtensionsByPartition.get(currentPartition());
+    const list = extMap ? [...extMap.values()].map(({ popupPath, storageId, ...rest }) => rest) : [];
+    toolbar.webContents.send('extensions', list);
+  }
+
+  function closeExtensionPopup() {
+    if (!extensionPopupView) {
+      return;
+    }
+    // Clear state BEFORE tearing the view down, not after: removeChildView
+    // can itself synchronously fire the popup's own 'blur' listener (set up
+    // in extensionAction below) as a side effect of losing focus/being
+    // detached — if that re-enters this function while extensionPopupView
+    // still pointed at the (now half-destroyed) view, it double-closed the
+    // same webContents and hung the whole app (confirmed live: the window
+    // froze and even the DevTools protocol stopped responding). With state
+    // cleared first, that re-entrant call sees extensionPopupView as null
+    // and does nothing.
+    const view = extensionPopupView;
+    extensionPopupView = null;
+    extensionPopupOwnerId = null;
+    win.contentView.removeChildView(view);
+    view.webContents.close();
+  }
+
+  // `rect` is the clicked toolbar button's own getBoundingClientRect()
+  // (plain {left, right, bottom} object sent over IPC), used to position
+  // the popup directly under it — Chrome extension popups have no native
+  // window of their own here (this app builds its own toolbar chrome from
+  // scratch), so this is a real WebContentsView loaded to the extension's
+  // own chrome-extension:// origin, not an element inside the toolbar's
+  // page. Toggling the same button again closes it; clicking a different
+  // extension's button switches straight to that one.
+  function extensionAction(extensionId, rect) {
+    if (extensionPopupOwnerId === extensionId) {
+      closeExtensionPopup();
+      return;
+    }
+    closeExtensionPopup();
+    const extMap = loadedExtensionsByPartition.get(currentPartition());
+    const meta = extMap && extMap.get(extensionId);
+    if (!meta || !meta.hasPopup) {
+      return;
+    }
+    const popupWidth = 360;
+    const popupHeight = 500;
+    const bounds = win.getBounds();
+    const x = Math.min(Math.max(0, Math.round((rect?.right || 0) - popupWidth)), Math.max(0, bounds.width - popupWidth));
+    const y = Math.round(rect?.bottom || TOOLBAR_HEIGHT);
+    const view = new WebContentsView({
+      webPreferences: { partition: currentPartition(), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    view.setBounds({ x, y, width: popupWidth, height: Math.min(popupHeight, Math.max(120, bounds.height - y - 8)) });
+    win.contentView.addChildView(view);
+    view.webContents.loadURL(`chrome-extension://${extensionId}/${meta.popupPath}`);
+    // Real browsers close an extension popup the instant it loses focus
+    // (click anywhere else, including into the page) — webContents' own
+    // 'blur' event covers that without needing a separate outside-click
+    // listener.
+    view.webContents.on('blur', () => {
+      if (extensionPopupView === view) {
+        closeExtensionPopup();
+      }
+    });
+    extensionPopupView = view;
+    extensionPopupOwnerId = extensionId;
+  }
+
+  // For the woowil://extensions management page: every installed
+  // extension for this profile, enabled or not (loadedExtensionsByPartition
+  // only ever has the currently-*loaded*, i.e. enabled, ones — a disabled
+  // extension's name/version/icon are instead read straight from its own
+  // manifest.json on disk).
+  function getExtensionsPage() {
+    const entries = store.getExtensionEntries(currentProfileId);
+    const extMap = loadedExtensionsByPartition.get(currentPartition()) || new Map();
+    const loadedByStorageId = new Map([...extMap.values()].map((meta) => [meta.storageId, meta]));
+    return entries.map((entry) => {
+      const loaded = loadedByStorageId.get(entry.storageId);
+      if (loaded) {
+        return {
+          storageId: entry.storageId,
+          enabled: entry.enabled,
+          name: loaded.name,
+          version: loaded.version,
+          icon: loaded.icon,
+        };
+      }
+      const extPath = path.join(store.extensionsDir(currentProfileId), entry.storageId);
+      try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(extPath, 'manifest.json'), 'utf8'));
+        return {
+          storageId: entry.storageId,
+          enabled: entry.enabled,
+          name: manifest.name || entry.storageId,
+          version: manifest.version || '',
+          icon: extensionIconDataUrl(extPath, manifest),
+        };
+      } catch {
+        return { storageId: entry.storageId, enabled: entry.enabled, name: entry.storageId, version: '', icon: null };
+      }
+    });
+  }
+
+  async function installExtensionFromDirectory(sourceDir) {
+    if (incognito) {
+      throw new Error('Udvidelser kan ikke installeres i et privat vindue — skift til et almindeligt vindue.');
+    }
+    if (!fs.existsSync(path.join(sourceDir, 'manifest.json'))) {
+      throw new Error('Mappen indeholder ikke en manifest.json — det er ikke en gyldig udvidelse.');
+    }
+    const storageId = crypto.randomUUID();
+    const destPath = path.join(store.extensionsDir(currentProfileId), storageId);
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.cpSync(sourceDir, destPath, { recursive: true });
+    try {
+      await loadOneExtension(currentPartition(), destPath);
+    } catch (err) {
+      fs.rmSync(destPath, { recursive: true, force: true });
+      throw new Error(`Kunne ikke indlæse udvidelsen: ${err.message}`);
+    }
+    store.addExtensionEntry(currentProfileId, storageId);
+    return getExtensionsPage();
+  }
+
+  async function installExtensionFromArchive(filePath) {
+    if (incognito) {
+      throw new Error('Udvidelser kan ikke installeres i et privat vindue — skift til et almindeligt vindue.');
+    }
+    const storageId = crypto.randomUUID();
+    const destPath = path.join(store.extensionsDir(currentProfileId), storageId);
+    fs.mkdirSync(destPath, { recursive: true });
+    try {
+      extractExtensionArchive(filePath, destPath);
+      if (!fs.existsSync(path.join(destPath, 'manifest.json'))) {
+        // Some .crx/.zip exports wrap everything in one extra top-level
+        // folder instead of putting manifest.json at the archive root —
+        // flatten it up into destPath so this extension's storageId always
+        // maps directly to a real extension root, same as every other
+        // install path.
+        const entries = fs.readdirSync(destPath, { withFileTypes: true });
+        const dirs = entries.filter((e) => e.isDirectory());
+        if (dirs.length === 1 && fs.existsSync(path.join(destPath, dirs[0].name, 'manifest.json'))) {
+          const nested = path.join(destPath, dirs[0].name);
+          const flattenTmp = destPath + '-flatten-tmp';
+          fs.renameSync(nested, flattenTmp);
+          fs.rmSync(destPath, { recursive: true, force: true });
+          fs.renameSync(flattenTmp, destPath);
+        }
+      }
+      if (!fs.existsSync(path.join(destPath, 'manifest.json'))) {
+        throw new Error('Filen indeholder ikke en gyldig udvidelse (ingen manifest.json fundet).');
+      }
+      await loadOneExtension(currentPartition(), destPath);
+    } catch (err) {
+      fs.rmSync(destPath, { recursive: true, force: true });
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+    store.addExtensionEntry(currentProfileId, storageId);
+    return getExtensionsPage();
+  }
+
+  function findLoadedRuntimeId(storageId) {
+    const extMap = loadedExtensionsByPartition.get(currentPartition());
+    if (!extMap) {
+      return null;
+    }
+    for (const meta of extMap.values()) {
+      if (meta.storageId === storageId) {
+        return meta.id;
+      }
+    }
+    return null;
+  }
+
+  function removeExtensionPage(storageId) {
+    const runtimeId = findLoadedRuntimeId(storageId);
+    if (runtimeId) {
+      unloadOneExtension(currentPartition(), runtimeId);
+    }
+    store.removeExtensionEntry(currentProfileId, storageId);
+    return getExtensionsPage();
+  }
+
+  async function setExtensionEnabledPage(storageId, enabled) {
+    store.setExtensionEnabled(currentProfileId, storageId, enabled);
+    if (enabled) {
+      const extPath = path.join(store.extensionsDir(currentProfileId), storageId);
+      try {
+        await loadOneExtension(currentPartition(), extPath);
+      } catch (err) {
+        console.error(`Kunne ikke genindlæse udvidelse ${storageId}:`, err);
+      }
+    } else {
+      const runtimeId = findLoadedRuntimeId(storageId);
+      if (runtimeId) {
+        unloadOneExtension(currentPartition(), runtimeId);
+      }
+    }
+    return getExtensionsPage();
+  }
+
   function showUpdateReady(version) {
     updateBannerOpen = true;
     toolbar.webContents.send('update-ready', version);
@@ -733,6 +1121,7 @@ function createWindow(store, opts = {}) {
     ensureDownloadsHandled(partition);
     ensurePermissionsHandled(partition);
     ensureAdBlockHandled(partition, currentProfileId, store);
+    ensureExtensionsHandled(partition, currentProfileId, store);
     const view = new WebContentsView({
       webPreferences: {
         contextIsolation: true,
@@ -1063,12 +1452,14 @@ function createWindow(store, opts = {}) {
   // Switches without any password check; only call once the caller has
   // confirmed access (see requestSwitchProfile/unlockProfile below).
   function activateProfile(id) {
+    closeExtensionPopup();
     closeAllTabs();
     currentProfileId = id;
     store.setActiveProfileId(id);
     sendProfiles();
     sendTheme();
     sendBookmarksBar();
+    sendExtensions();
     loadWorkspacesAndOpenTabs(true);
   }
 
@@ -1323,6 +1714,17 @@ function createWindow(store, opts = {}) {
     cancelDownload: cancelDownloadAction,
     openDownload: openDownloadAction,
     showDownloadInFolder: showDownloadInFolderAction,
+    extensionAction,
+    refreshExtensionsForPartition: (partition) => {
+      if (currentPartition() === partition) {
+        sendExtensions();
+      }
+    },
+    getExtensionsPage,
+    installExtensionFromDirectory,
+    installExtensionFromArchive,
+    removeExtensionPage,
+    setExtensionEnabledPage,
   };
   windowContexts.set(toolbar.webContents.id, ctx);
 
@@ -1343,6 +1745,7 @@ function createWindow(store, opts = {}) {
     sendTheme();
     sendBookmarksBar();
     sendDownloadsBadge();
+    sendExtensions();
     loadWorkspacesAndOpenTabs(opts.isInitial);
     if (opts.startupUrl) {
       createTab(opts.startupUrl, activeWorkspaceId);
@@ -1389,6 +1792,7 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil:find-in-page', (event, text, options) => ctxFor(event)?.findInPage(text, options));
   ipcMain.on('woowil:close-find-bar', (event) => ctxFor(event)?.closeFindBar());
   ipcMain.on('woowil:respond-permission', (event, id, allow) => ctxFor(event)?.respondPermission(id, allow));
+  ipcMain.on('woowil:extension-action', (event, extensionId, rect) => ctxFor(event)?.extensionAction(extensionId, rect));
   ipcMain.on('woowil:new-window', (event) => ctxFor(event)?.newWindow());
   ipcMain.on('woowil:new-incognito-window', (event) => ctxFor(event)?.newIncognitoWindow());
   ipcMain.on('woowil:restart-and-update', (event) => ctxFor(event)?.restartAndUpdate());
@@ -1413,6 +1817,49 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil-pages:cancel-download', (event, id) => tabCtxFor(event)?.cancelDownload(id));
   ipcMain.on('woowil-pages:open-download', (event, id) => tabCtxFor(event)?.openDownload(id));
   ipcMain.on('woowil-pages:show-download-in-folder', (event, id) => tabCtxFor(event)?.showDownloadInFolder(id));
+
+  ipcMain.handle('woowil-pages:get-extensions', (event) => tabCtxFor(event)?.getExtensionsPage() ?? []);
+  ipcMain.handle('woowil-pages:install-extension-folder', async (event) => {
+    const ctx = tabCtxFor(event);
+    if (!ctx) {
+      return { extensions: [] };
+    }
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: 'Vælg en udpakket udvidelses-mappe',
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { extensions: ctx.getExtensionsPage() };
+    }
+    try {
+      return { extensions: await ctx.installExtensionFromDirectory(result.filePaths[0]) };
+    } catch (err) {
+      return { error: err.message, extensions: ctx.getExtensionsPage() };
+    }
+  });
+  ipcMain.handle('woowil-pages:install-extension-file', async (event) => {
+    const ctx = tabCtxFor(event);
+    if (!ctx) {
+      return { extensions: [] };
+    }
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      title: 'Vælg en .crx- eller .zip-udvidelse',
+      filters: [{ name: 'Chrome-udvidelse', extensions: ['crx', 'zip'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { extensions: ctx.getExtensionsPage() };
+    }
+    try {
+      return { extensions: await ctx.installExtensionFromArchive(result.filePaths[0]) };
+    } catch (err) {
+      return { error: err.message, extensions: ctx.getExtensionsPage() };
+    }
+  });
+  ipcMain.handle('woowil-pages:remove-extension', (event, storageId) => tabCtxFor(event)?.removeExtensionPage(storageId) ?? []);
+  ipcMain.handle('woowil-pages:set-extension-enabled', (event, storageId, enabled) =>
+    tabCtxFor(event)?.setExtensionEnabledPage(storageId, enabled) ?? []
+  );
 }
 
 // When Woowil is the OS default browser, xdg-open (or any other app - the

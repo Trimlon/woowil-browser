@@ -108,11 +108,20 @@ overraskelser i koden:
   `location.protocol === 'woowil:'` — en almindelig hjemmeside ser aldrig
   IPC-broen).
 - `servePage()` i `main.js` har en **allowlist** af kendte interne sider
-  (`newtab`, `settings`, `history`, `bookmarks`, `downloads`) plus et
-  path-resolution-tjek. Der var oprindeligt en path-traversal-sårbarhed her
-  (hostname `".."` kunne læse filer uden for `pages/`) — allerede fundet og
-  rettet, men **enhver ændring af `servePage`/`KNOWN_PAGES` skal bevare
-  begge lag** af beskyttelsen.
+  (`newtab`, `settings`, `history`, `bookmarks`, `downloads`, `extensions`)
+  plus et path-resolution-tjek. Der var oprindeligt en
+  path-traversal-sårbarhed her (hostname `".."` kunne læse filer uden for
+  `pages/`) — allerede fundet og rettet, men **enhver ændring af
+  `servePage`/`KNOWN_PAGES` skal bevare begge lag** af beskyttelsen.
+- **En installeret Chrome-udvidelse er en langt større tillidsgrænse end
+  en almindelig hjemmeside** — den kan læse/ændre indhold på tværs af alle
+  sider den har `matches`-adgang til, uafhængigt af denne apps egne
+  `contextIsolation`/`sandbox`-grænser (det er sådan extension-API'et er
+  designet til at virke, ikke en fejl her). Der er bevidst ingen
+  signatur-/kilde-verificering af installerede `.crx`/.zip-filer eller
+  mapper — brugeren installerer udelukkende noget de selv aktivt har
+  valgt en fil til, samme tillidsmodel som når man selv slår
+  "udviklertilstand" til i rigtige Chrome.
 - Adressefeltet blokerer `javascript:`/`vbscript:`-URL'er eksplicit
   (`UNSAFE_SCHEMES` i `main.js`) — en kendt anti-social-engineering-detalje
   fra rigtige browsere, tilføjet efter en sikkerhedsgennemgang.
@@ -121,19 +130,100 @@ overraskelser i koden:
   registrere handlers direkte inde i `createWindow()` (det ville fejle med
   flere vinduer, da `ipcMain.on/handle` er globale).
 
+## Chrome-udvidelser
+
+Per-profil (samme model som Chrome selv, og matcher projektets eksisterende
+per-profil session-partitions) — ikke ét globalt sæt delt af alle profiler.
+Ingen adgang til selve Chrome Web Store (Electron har ikke det); brugeren
+installerer fra en udpakket mappe eller en .crx-/.zip-fil via
+`woowil://extensions`.
+
+- **`session.loadExtension()`/`.removeExtension()`/`session.on('extension-
+  loaded', ...)` er forældede i denne Electron-version — brug
+  `session.fromPartition(partition).extensions.*` i stedet.** Bekræftet
+  direkte (ikke kun ud fra en deprecation-advarsel) med et minimalt
+  standalone script før noget af dette blev kodet ind i `main.js`: den
+  gamle vej virker stadig, men logger en advarsel; hele API-fladen
+  (`loadExtension`, `removeExtension`, `getAllExtensions`, begge events)
+  findes identisk under `.extensions`.
+- **En session skal have `persist:`-præfiks for overhovedet at kunne
+  indlæse udvidelser** — et bart `session.fromPartition(id)` (uden
+  `persist:`) fejler med "Extensions cannot be loaded in a temporary
+  session", bekræftet direkte. Incognito-vinduers partition har bevidst
+  intet `persist:`-præfiks (se `incognitoPartition` i `main.js`) — matcher
+  heldigvis også hvordan rigtige browsere som udgangspunkt opfører sig
+  (udvidelser kører ikke i incognito), så `ensureExtensionsHandled()`
+  springer indlæsning helt over for den slags partitions, og
+  installations-funktionerne afviser eksplicit med en fejlbesked frem for
+  at ramme denne exception blindt.
+- **Egen `storageId` (en UUID vi selv genererer), ikke Chromes egen
+  `extension.id`, er nøglen i `extensions.json` og for selve mappenavnet
+  under `extensionsDir()`.** Chromes id afhænger af enten en `key` i
+  manifestet eller — når den mangler, som for stort set alt der ikke er
+  hentet fra selve Web Store — en hash af den absolutte installationssti.
+  At forsøge at omdøbe en allerede indlæst udvidelses mappe til at matche
+  dens egen afledte id bagefter virker ikke pålideligt (den indlæste
+  instans peger stadig på den gamle sti internt i Chromium). Løsningen: stien
+  vi installerer til rører vi aldrig igen — `extensionMetadata()` i
+  `main.js` udleder `storageId` tilbage fra `extension.path`s eget
+  mappenavn hver gang, så der aldrig er tvivl om hvilken installeret post
+  et indlæst `extension.id` hører til.
+- **Ægte, reproducerbar hænge-fejl fundet og rettet under test**: at lukke
+  extension-popup'en (`closeExtensionPopup()`) ved at fjerne dens
+  `WebContentsView` og bagefter nulstille state kunne re-entre sig selv —
+  `removeChildView()` udløser popup'ens eget `'blur'`-event synkront som
+  en sideeffekt, og den blur-handler kalder `closeExtensionPopup()` igen,
+  som (fordi state endnu ikke var nulstillet) forsøgte at lukke den samme
+  `webContents` en gang til og frøs hele appen (bekræftet live — selv CDP
+  stoppede med at svare). Rettelsen: nulstil `extensionPopupView`/
+  `extensionPopupOwnerId` til `null` **før** `removeChildView()`/
+  `webContents.close()` kaldes, ikke bagefter — samme
+  nulstil-state-før-du-river-ned-mønster er værd at huske hvis flere
+  synkrone "luk denne overlay"-funktioner tilføjes senere.
+- **Popup'en er sin egen `WebContentsView`, ikke HTML inde i toolbarens
+  egen side** — i modsætning til adresseforslag/workspace-switcher (som
+  bruger `setOverlayOpen()` til bare at gøre toolbar-viewet højere, fordi
+  det indhold allerede ligger i toolbarens eget dokument). En udvidelses
+  popup skal køre med sin egen `chrome-extension://<id>/`-origin for
+  overhovedet at få `chrome.*`-API'erne, så den kan ikke bare indlejres som
+  et iframe i en anden sides DOM. `extensionAction()` opretter/positionerer
+  derfor en helt ny `WebContentsView` under den klikkede knap (koordinater
+  sendt fra `toolbar.js` via `getBoundingClientRect()`), på samme måde som
+  faner selv oprettes og fjernes.
+- **Værktøjslinjens ikon-knapper er bygget fra bunden i `toolbar.js`** (der
+  er jo ingen indbygget Chrome-værktøjslinje her) — selve ikonet sendes som
+  en `data:`-URL fra main-processen (læst og base64-encodet direkte fra
+  udvidelsens egen manifest-refererede fil), så renderer-processen aldrig
+  selv behøver at kunne hente `chrome-extension://`-indhold.
+- **Testet grundigt live** med en minimal selvlavet MV3-testudvidelse
+  (indlæsning, ikon i værktøjslinjen, klik åbner/lukker popup, aktiver/
+  deaktiver, fjern, persistering på disk) og en standalone-test af selve
+  CRX/ZIP-udpakningen (inkl. en simuleret CRX med falske header-bytes foran
+  den rigtige ZIP). **Ikke** testet: den native filvælger-dialog
+  (`dialog.showOpenDialog`) selv — samme klasse miljøbegrænsning som ramte
+  VM-testing i woowil-os-projektet (portal-baserede dialoger ser ikke ud
+  til at kunne åbne rigtigt i dette sandboxede/remote skrivebordsmiljø);
+  test dette specifikt på en rigtig maskine før det regnes for 100%
+  bekræftet end-to-end.
+
 ## Filoversigt
 
 - `src/main.js` — main-process. Alt: vinduer, faner, arbejdsområder, profiler,
-  downloads, adblock, permissions, auto-updater, alle IPC-handlers.
+  downloads, adblock, permissions, auto-updater, extensions, alle
+  IPC-handlers.
 - `src/preload.js` — `window.woowil` API til toolbaren.
 - `src/pages-preload.js` — `window.woowilPages` API, kun på `woowil://`.
 - `src/profile-store.js` — JSON-baseret lager under Electrons `userData`
   (`~/.config/woowil/profiles/<id>/`): settings, historik, bogmærker,
   downloads, workspace-state (navngivne arbejdsområder + hvilke faner der
-  hørte til hvert, bruges til session-gendannelse).
+  hørte til hvert, bruges til session-gendannelse), installerede
+  udvidelser (`extensions.json` + selve de udpakkede mapper under
+  `extensions/<storageId>/`).
 - `src/renderer/` — selve toolbar-UI'et (faner, adressefelt, sidepanel,
-  find-bar, permission-banner, update-banner, workspace-switcher).
-- `src/pages/` — interne `woowil://`-sider, serveret af `servePage()`.
+  find-bar, permission-banner, update-banner, workspace-switcher,
+  extension-knapper).
+- `src/pages/` — interne `woowil://`-sider, serveret af `servePage()`,
+  inkl. `extensions/` (installer/liste/fjern udvidelser).
 - `scripts/release.js` — se "Udgivelse" nedenfor.
 
 ## Udgivelse / distribution — læs dette før du bygger noget
@@ -226,7 +316,4 @@ installeret som standard) — `sudo pacman -S fuse2`, eller kør med
 ## Ting brugeren bevidst har fravalgt/udskudt
 
 - Konto-sync på tværs af enheder (kun lokale profiler).
-- Chrome-udvidelser (slået fra med `disable-extensions` for lavt RAM-forbrug;
-  Electron understøtter kun lokale/upakkede udvidelser med delvis API-dækning
-  alligevel, ikke Web Store).
 - Kodesignering af Windows-builden (koster penge, ikke gjort endnu).

@@ -71,4 +71,7 @@ contextBridge.exposeInMainWorld('woowil', {
     ipcRenderer.on('permission-request', (_event, data) => callback(data)),
   onUpdateReady: (callback) =>
     ipcRenderer.on('update-ready', (_event, version) => callback(version)),
+  onExtensions: (callback) =>
+    ipcRenderer.on('extensions', (_event, list) => callback(list)),
+  extensionAction: (id, rect) => ipcRenderer.send('woowil:extension-action', id, rect),
 });
