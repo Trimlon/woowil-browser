@@ -1,6 +1,6 @@
 {
   "name": "woowil",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "Woowil - a minimal custom browser built on Electron.",
   "author": "Trimlon",
@@ -14,7 +14,7 @@
     "release": "node scripts/release.js"
   },
   "devDependencies": {
-    "electron": "^44.0.0",
+    "electron": "^44.4.3",
     "electron-builder": "^26.15.3"
   },
   "build": {

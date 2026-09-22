@@ -237,6 +237,46 @@ installerer fra en udpakket mappe eller en .crx-/.zip-fil via
   in-process filvælger i stedet for portal-D-Bus-vejen. Udgivet som v0.2.2;
   bed altid brugeren bekræfte på rigtig hardware efter denne slags fix, da
   sandboxen ikke selv kan give en fuld positiv verifikation.
+- **RETTELSE til ovenstående: v0.2.2 løste IKKE brugerens crash** —
+  brugeren rapporterede stadig crash, og det viste sig at være noget helt
+  andet: ikke vores `woowil://extensions`-side eller nogen `dialog.*`-kald
+  overhovedet, men selve **chromewebstore.google.com**-webstedet (hvor
+  brugeren prøvede at hente Bitwarden/Claude-udvidelser). Denne gang blev
+  det gentvunget 100% deterministisk (to gange, samme absolutte
+  krasch-adresse begge gange) ved at starte appen under `gdb` med
+  `catch signal SIGSEGV` og bare navigere til en `/detail/<id>`-side på
+  Chrome Web Store — ingen klik krævedes overhovedet. Disassemblen viste et
+  reelt null-pointer-kald (`mov 0x0,%rcx` efterfulgt af `call *0x40(%rcx)`,
+  dvs. et virtuelt kald gennem et null-objekt) i browser-processens
+  hovedtråd. En websøgning fandt den præcise, allerede kendte årsag: dette
+  er en ægte fejl i **Electron 44.3.0 selv** (ikke i vores kode) —
+  Chromium eksponerer `chrome.webstorePrivate` til almindelige websider på
+  Chrome Web Store uden nogen `WebstorePrivateAPIDelegate` bagved i
+  Electron, og butikkens egen side kalder
+  `chrome.webstorePrivate.getReferrerChain()` med det samme en
+  produktside renderes — det null-delegate-kald er præcis det der
+  segfaulter hele browser-processen (og dermed alle vinduer/faner på
+  samme tid). Rettet opstrøms i Electron 44.4.0 (udgivet 2026-09-15):
+  `chrome.webstorePrivate` er nu helt utilgængelig, og de core-registrerede
+  funktioner svarer med en fejl i stedet for at kalde ind i en null
+  delegate. **Fix: opgraderet `electron`-devDependency fra `^44.0.0`
+  (reelt installeret: 44.3.0) til `^44.4.3`.** Verificeret ved at gentage
+  præcis den samme gdb+navigations-reproduktion efter opgraderingen — ingen
+  crash, siden loader fint (butikkens egen JS kaster nu bare en harmløs
+  "Uncaught (in promise) Error" i stedet for at tage hele appen ned).
+  Udgivet som v0.2.3. **Lære for fremtiden**: når et rapporteret crash ikke
+  forsvinder efter et målrettet fix, så tro ikke automatisk at den første
+  hypotese var forkert i detaljen — overvej om det er en helt anden,
+  endnu ikke identificeret fejl, og brug `gdb`+`catch signal` til en
+  virkelig deterministisk reproduktion frem for at gætte videre på
+  stack-traces fra `coredumpctl` alene. En hurtig websøgning på den
+  konkrete krasch-signatur (nulpointer + Electron-version + hvilken
+  hjemmeside) sparede meget tid her.
+- GTK_USE_PORTAL=0-fixet fra forrige punkt er stadig i koden og skader
+  ikke noget, men det var altså aldrig den egentlige årsag til brugerens
+  gentagne crash-rapporter — hold det adskilt i hovedet fra
+  webstorePrivate-fejlen ovenfor, hvis der nogensinde dukker endnu et
+  `dialog.*`-relateret crash op.
 
 ## Filoversigt
 
