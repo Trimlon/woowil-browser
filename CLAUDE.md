@@ -216,6 +216,27 @@ installerer fra en udpakket mappe eller en .crx-/.zip-fil via
   skal altid have `ctx.win` (eller det tilsvarende vindue) som første
   argument** — spring det aldrig over, selv når det ser ud til at virke i
   test.
+- **`dialog.showOpenDialog()` kan stadig SIGSEGV'e, selv med korrekt
+  `ctx.win`, hvis den native dialog routes gennem xdg-desktop-portal** —
+  fundet efter v0.2.1 (som fixede ovenstående `ctx.win`-bug) stadig
+  crashede på brugerens rigtige KDE-maskine "kort efter" udvidelsessiden.
+  Denne gang lykkedes det faktisk at reproducere crashet på en delt
+  udviklingsmaskine (i modsætning til den rene sandbox, hvor portal-dialoger
+  bare hænger uden fejl): `coredumpctl` viste et rigtigt SIGSEGV i
+  hovedtråden inde i en GLib main-context-iteration, umiddelbart efter
+  loggen registrerede portalens `application/vnd.portal.filetransfer`/
+  `application/vnd.portal.files`-atomer — dvs. under selve
+  xdg-desktop-portal FileChooser D-Bus-handshaket, ikke i vores egen JS.
+  Kunne ikke gentvinge crashet 100% deterministisk via CDP-simulerede klik
+  (samme begrænsning som før — ægte portal-interaktion kræver en rigtig
+  bruger), så fixet er baseret på stack-trace-beviset, ikke en direkte
+  "crashede før, crasher ikke nu"-verifikation. Fix: `process.env.
+  GTK_USE_PORTAL = '0'` sat allerført i `main.js`, før noget GTK-relateret
+  initialiseres (også før den eksisterende X11-genstart-logik, så flaget
+  arver med over i den respawnede proces) — tvinger GTK til sin klassiske
+  in-process filvælger i stedet for portal-D-Bus-vejen. Udgivet som v0.2.2;
+  bed altid brugeren bekræfte på rigtig hardware efter denne slags fix, da
+  sandboxen ikke selv kan give en fuld positiv verifikation.
 
 ## Filoversigt
 

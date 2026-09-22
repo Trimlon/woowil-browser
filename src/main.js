@@ -1,3 +1,16 @@
+// Force GTK to use its classic in-process file chooser instead of routing
+// dialog.showOpenDialog()/showSaveDialog() through the xdg-desktop-portal
+// FileChooser D-Bus interface. Confirmed via coredumpctl on real KDE
+// hardware: the app SIGSEGVs in the main thread inside a GLib main-context
+// iteration, right after the portal's "application/vnd.portal.filetransfer"
+// / "application/vnd.portal.files" atoms get registered - i.e. during the
+// portal dialog handshake, not inside our own JS. Must be set before GTK
+// initializes its file-chooser backend (lazily, on first dialog call), so
+// set it as early as possible and let it propagate to the X11 respawn below.
+if (process.platform === 'linux') {
+  process.env.GTK_USE_PORTAL = '0';
+}
+
 // Force XWayland (X11) instead of native Wayland on Linux, before Electron's
 // own bootstrap picks an Ozone backend. Each window is a single BaseWindow
 // with several WebContentsView children (toolbar + one per tab); under
