@@ -439,3 +439,30 @@ globen ingenting.
 
 - Konto-sync på tværs af enheder (kun lokale profiler).
 - Kodesignering af Windows-builden (koster penge, ikke gjort endnu).
+- **Fuld `chrome.tabs`/`chrome.windows`-understøttelse for udvidelser
+  (`electron-chrome-extensions`-biblioteket)** — Bitwarden (og formentlig
+  mange andre "rigtige" udvidelser) kalder `chrome.tabs.getCurrent()`, som
+  Electrons indbyggede extensions-API'et **bevidst** ikke implementerer
+  (Electrons egen dokumentation: "concepts like tabs, popups, and
+  extension actions aren't known to Electron"). Bekræftet live: Bitwardens
+  popup åbner faktisk fint (en rigtig `WebContentsView`, positioneret
+  korrekt), men hænger for evigt på en indlæsnings-spinner, fordi det
+  manglende API-kald kaskaderer ind i dens egen state-migrations-logik
+  ("Waiting for migrations to finish..." i det uendelige). Undersøgte
+  `electron-chrome-extensions` (det anerkendte tredjeparts-bibliotek der
+  udfylder præcis dette hul) som en rigtig fix, men fravalgt bevidst efter
+  at have fundet to reelle blokkere: (1) **GPL-3.0-licens** — ville enten
+  kræve at Woowil selv blev open source, eller en betalt "Patron License"
+  for proprietær brug, en forretningsbeslutning der ikke er taget, og (2)
+  biblioteket forudsætter rigtige `Electron.BrowserWindow`-instanser til
+  sin tab/vindue-håndtering (`addTab(webContents, browserWindow)`) — det
+  er ikke dokumenteret som kompatibelt med appens gennemgående
+  `BaseWindow`+`WebContentsView`-arkitektur, så det ville sandsynligvis
+  kræve en større omskrivning af selve vindueshåndteringen, ikke bare
+  udvidelses-koden. **Nuværende status**: simple udvidelser uden
+  `chrome.tabs`-afhængighed virker fint (bekræftet med en minimal
+  selvlavet MV3-testudvidelse); udvidelser der bruger `chrome.tabs` (som
+  Bitwarden) installerer og viser deres ikon korrekt, men popup'en hænger
+  på indlæsning. Ingen polyfill-forsøg gjort endnu — brugeren afviste
+  eksplicit både biblioteket og en hurtig egen-skrevet delvis polyfill til
+  fordel for at leve med begrænsningen for nu.
