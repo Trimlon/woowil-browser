@@ -170,10 +170,12 @@ Bogmærker/historik/indstillinger er fælles for alle arbejdsområder.
   en Tillad/Bloker-bjælke i toolbaren i stedet for at blive givet
   automatisk.
 
-Extensions (Chrome-udvidelser) er ikke slået til — se koden i
-`src/main.js` (`disable-extensions`-flaget) hvis det skal ændres; Electron
-understøtter kun lokale/upakkede udvidelser med delvis API-dækning, ikke
-direkte installation fra Chrome Web Store.
+- **Chrome-udvidelser**: installér fra `woowil://extensions` — en udpakket
+  mappe, en `.crx`/`.zip`-fil, eller indsæt et link til/id fra Chrome Web
+  Store (hentes direkte fra Googles opdaterings-endpoint, siden butikkens
+  egen "Tilføj til Chrome"-knap ikke virker i Electron). Bruger
+  `electron-chrome-extensions` for fuld `chrome.tabs`/popup-understøttelse
+  — se `CLAUDE.md` → "Chrome-udvidelser" for detaljerne.
 
 ## Launcher
 

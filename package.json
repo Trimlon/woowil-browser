@@ -1,12 +1,13 @@
 {
   "name": "woowil",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "description": "Woowil - a minimal custom browser built on Electron.",
   "author": "Trimlon",
   "license": "GPL-3.0-or-later",
   "main": "src/main.js",
   "scripts": {
+    "prestart": "node scripts/bundle-preloads.js",
     "start": "electron .",
     "build:linux": "electron-builder --linux AppImage",
     "build:win": "electron-builder --win portable",
@@ -16,7 +17,8 @@
   },
   "devDependencies": {
     "electron": "^44.4.3",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2"
   },
   "build": {
     "appId": "dk.woowil.app",
@@ -56,6 +58,7 @@
   },
   "dependencies": {
     "adm-zip": "^0.6.1",
+    "electron-chrome-extensions": "^4.9.0",
     "electron-updater": "^6.8.9"
   }
 }

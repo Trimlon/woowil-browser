@@ -307,13 +307,115 @@ installerer fra en udpakket mappe eller en .crx-/.zip-fil via
   Bitwarden-crx, ikke noget der var synligt med den tidligere
   minimale MV2-testudvidelse.
 - Udgivet som v0.2.4.
+- **`electron-chrome-extensions` integreret — rigtige udvidelser (Bitwarden
+  m.fl.) virker nu, inklusiv popup'er, efter appen selv gik open source
+  under GPL-3.0** (se README → "Licens"): den tidligere licenskonflikt er
+  væk (begge er nu GPL-3.0-kompatible), og det viste sig — modsat hvad en
+  ældre version af bibliotekets README antydede — at biblioteket (v4.9.0)
+  reelt tager `Electron.BaseWindow` overalt i sin type-signatur
+  (`addTab(tab: WebContents, window: BaseWindow)`,
+  `PopupView`'s `parent: BaseWindow`), ikke `BrowserWindow` — bekræftet
+  direkte i den installerede pakkes egne `.d.ts`-filer, ikke i README'en,
+  så tjek altid selve typerne ved en fremtidig opdatering af biblioteket
+  frem for at stole på dokumentationens ordlyd. Verificeret med en
+  minimal standalone `BaseWindow`+`WebContentsView`-testapp (samme
+  arkitekturmønster som denne app) FØR noget blev rørt i `main.js` —
+  samme disciplin som resten af dette projekt.
+  - **Hvad der ændrede sig**: `ensureExtensionsHandled()` opretter nu også
+    én `ElectronChromeExtensions`-instans pr. partition (i
+    `chromeExtensionsApiByPartition`), med `createTab`/`selectTab`/
+    `removeTab`-callbacks der finder det rigtige vindue via den nye
+    `findWindowContextForPartition()` (flere vinduer kan dele samme
+    profils partition — vælger det fokuserede, ellers det første).
+    `createTab()`/`switchToTab()`/`closeTab()` kalder nu selv
+    `chromeExtensionsApi.addTab()`/`.selectTab()`/`.removeTab()` den anden
+    vej, så biblioteket altid ved hvilke faner der findes. Hele det gamle
+    håndbyggede popup-lag (`extensionPopupView`, `closeExtensionPopup()`,
+    `extensionAction()`, `sendExtensions()`, `woowil:extension-action`-IPC,
+    `#extensions-bar`/`.extension-btn` i toolbar.js/html/css) er fjernet —
+    erstattet af `<browser-action-list>`-elementet
+    (`electron-chrome-extensions/browser-action`), som selv tegner ikoner
+    (via `crx://`-protokollen) og styrer popup'en (som en helt separat,
+    rigtig `BrowserWindow`, ikke en `WebContentsView` som før).
+  - **Vores eget installations-/administrationslag (`installExtension*`,
+    `woowil://extensions`-siden, `profile-store.js`'s `extensions.json`,
+    `loadedExtensionsByPartition`/`ensureExtensionsHandled`'s
+    `extension-loaded`/`-unloaded`-lyttere) er UÆNDRET** — biblioteket
+    erstatter kun "hvilke chrome.*-API'er virker for allerede-indlæste
+    udvidelser + værktøjslinje-ikon/popup-UI'et", ikke hvordan udvidelser
+    installeres/fjernes/gemmes.
+  - **`crx://`-protokollen skal håndteres på toolbar'ens EGEN session
+    (default session), ikke på hver profils partition-session** — fundet
+    ved at læse selve bibliotekets kompilerede kildekode (ikke kun
+    typedefinitionerne): `handleCRXProtocol(session)` registrerer sig på
+    den session der MODTAGER forespørgslen (her: toolbar'en, som altid
+    kører på `session.defaultSession`, se kommentaren ved
+    `protocol.handle('woowil', ...)`), og slår selv den RIGTIGE
+    målpartition op via et `?partition=`-query-param på selve
+    `crx://`-URL'en. At kalde den på profil-sessionen (min første,
+    forkerte antagelse, baseret på min egen standalone-test hvor
+    værktøjslinjen ved en fejl delte session med fanerne) gjorde intet.
+  - **Reel opstarts-race fundet og fikset ved rigtig test, ikke gættet
+    frem**: `<browser-action-list>` forsøger at forespørge "aktiv fane"-
+    tilstand med det samme den monteres i DOM'en — men `ensureExtensions
+    Handled()` (og dermed selve `ElectronChromeExtensions`-instansen, som
+    globalt kun første gang registrerer IPC-kanalen `crx-msg-remote` for
+    HELE appen via bibliotekets interne `RoutingDelegate`-singleton) blev
+    tidligere først kaldt dovent inde i `createTab()`, som kører EFTER
+    værktøjslinjens side allerede er loadet og har nået at forsøge sit
+    første kald. Symptom set live: konsol-fejl "No handler registered for
+    'crx-msg-remote'" og en permanent tom værktøjslinje (ingen ikoner
+    overhovedet), fordi elementet ikke selv prøver igen efter et
+    mislykket første forsøg. Fix: `ensureExtensionsHandled()` for det
+    aktive vindues partition kaldes nu tidligt i `createWindow()`, FØR
+    `toolbar.webContents.loadFile(...)`.
+  - **Sandboxede preloads kan ikke `require()` npm-pakker direkte** —
+    `electron-chrome-extensions/browser-action`'s `injectBrowserAction()`
+    skal ind i værktøjslinjens preload, men den er (med god grund)
+    `sandbox: true`; et almindeligt `require()` af pakken fejlede live med
+    "module not found" selv om den samme `require()` virker fint
+    u-sandboxed. Løsning: `scripts/bundle-preloads.js` (esbuild, kaldt fra
+    `prestart` og fra `release.js` før hvert build) bundler
+    `src/toolbar-preload-entry.js` (som blot `require()`'r både det
+    gamle `preload.js` og `injectBrowserAction()`) til én selvstændig
+    `src/toolbar-preload.bundle.js` (git-ignoreret, altid regenereret) —
+    `main.js`'s toolbar-`WebContentsView` peger på den bundlede fil, ikke
+    på `preload.js` direkte længere.
+  - **`alignment="bottom right"`** sat eksplicit på `<browser-action-list>`
+    i `toolbar.html` — biblioteket kalder det "bottom left" som sin egen
+    standard, hvilket i denne apps layout (værktøjslinjen sidder øverst)
+    placerede popup'en delvist UDENFOR skærmen foroven ved et første,
+    forkert `alignment="top right"`-forsøg (fanget live: `xdotool
+    getwindowgeometry` viste `y: -10`) — "bottom" betyder popup'en åbner
+    NED under knappen, "right" at dens højre kant flugter med knappens,
+    samme visuelle mønster som en rigtig Chrome.
+  - Testet grundigt live, ende-til-ende, mod den ægte Bitwarden-udvidelse
+    (ikke kun en minimal testudvidelse): installation via
+    `installExtensionFromWebStore`, ikon vises korrekt i værktøjslinjen,
+    klik åbner en rigtig popup der når helt frem til Bitwardens egen
+    onboarding-UI (`#/intro-carousel`, ikke længere fanget på en evig
+    indlæsnings-spinner), samt en regressionstest af almindelig
+    fane-oprettelse/navigation/inkognito-vinduer efter ændringerne.
+  - **Kendt, ikke-blokerende støj**: Bitwardens baggrunds-service-worker
+    (formentlig dens `alarms`-brug) udløser periodisk (hvert ~10. sekund)
+    `NOTREACHED hit. Unexpected view type found: 0` i Electrons/Chromiums
+    egen extensions-kode — logges, men crasher ikke og påvirker ikke
+    synligt funktionaliteten; ikke undersøgt yderligere, da det ikke
+    blokerer den faktiske brug.
+  - Udgivet som v0.2.6.
 
 ## Filoversigt
 
 - `src/main.js` — main-process. Alt: vinduer, faner, arbejdsområder, profiler,
   downloads, adblock, permissions, auto-updater, extensions, alle
   IPC-handlers.
-- `src/preload.js` — `window.woowil` API til toolbaren.
+- `src/preload.js` — `window.woowil` API til toolbaren. IKKE brugt direkte
+  som preload længere — se `toolbar-preload-entry.js`.
+- `src/toolbar-preload-entry.js` — `require()`'r `preload.js` +
+  `electron-chrome-extensions/browser-action`; bundles til
+  `src/toolbar-preload.bundle.js` (git-ignoreret) af
+  `scripts/bundle-preloads.js`, som er det toolbar-`WebContentsView`'en
+  reelt bruger som sin `preload`.
 - `src/pages-preload.js` — `window.woowilPages` API, kun på `woowil://`.
 - `src/profile-store.js` — JSON-baseret lager under Electrons `userData`
   (`~/.config/woowil/profiles/<id>/`): settings, historik, bogmærker,
@@ -449,30 +551,3 @@ globen ingenting.
 
 - Konto-sync på tværs af enheder (kun lokale profiler).
 - Kodesignering af Windows-builden (koster penge, ikke gjort endnu).
-- **Fuld `chrome.tabs`/`chrome.windows`-understøttelse for udvidelser
-  (`electron-chrome-extensions`-biblioteket)** — Bitwarden (og formentlig
-  mange andre "rigtige" udvidelser) kalder `chrome.tabs.getCurrent()`, som
-  Electrons indbyggede extensions-API'et **bevidst** ikke implementerer
-  (Electrons egen dokumentation: "concepts like tabs, popups, and
-  extension actions aren't known to Electron"). Bekræftet live: Bitwardens
-  popup åbner faktisk fint (en rigtig `WebContentsView`, positioneret
-  korrekt), men hænger for evigt på en indlæsnings-spinner, fordi det
-  manglende API-kald kaskaderer ind i dens egen state-migrations-logik
-  ("Waiting for migrations to finish..." i det uendelige). Undersøgte
-  `electron-chrome-extensions` (det anerkendte tredjeparts-bibliotek der
-  udfylder præcis dette hul) som en rigtig fix, men fravalgt bevidst efter
-  at have fundet to reelle blokkere: (1) **GPL-3.0-licens** — ville enten
-  kræve at Woowil selv blev open source, eller en betalt "Patron License"
-  for proprietær brug, en forretningsbeslutning der ikke er taget, og (2)
-  biblioteket forudsætter rigtige `Electron.BrowserWindow`-instanser til
-  sin tab/vindue-håndtering (`addTab(webContents, browserWindow)`) — det
-  er ikke dokumenteret som kompatibelt med appens gennemgående
-  `BaseWindow`+`WebContentsView`-arkitektur, så det ville sandsynligvis
-  kræve en større omskrivning af selve vindueshåndteringen, ikke bare
-  udvidelses-koden. **Nuværende status**: simple udvidelser uden
-  `chrome.tabs`-afhængighed virker fint (bekræftet med en minimal
-  selvlavet MV3-testudvidelse); udvidelser der bruger `chrome.tabs` (som
-  Bitwarden) installerer og viser deres ikon korrekt, men popup'en hænger
-  på indlæsning. Ingen polyfill-forsøg gjort endnu — brugeren afviste
-  eksplicit både biblioteket og en hurtig egen-skrevet delvis polyfill til
-  fordel for at leve med begrænsningen for nu.

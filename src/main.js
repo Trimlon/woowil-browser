@@ -51,6 +51,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { autoUpdater } = require('electron-updater');
 const AdmZip = require('adm-zip');
+const { ElectronChromeExtensions } = require('electron-chrome-extensions');
 const { ProfileStore } = require('./profile-store');
 
 // A plain browser window has no use for Electron's default File/Edit/View
@@ -343,11 +344,19 @@ function extensionMetadata(extension) {
 // by hand at every call site that might change it.
 const loadedExtensionsByPartition = new Map();
 
-function broadcastExtensionsForPartition(partition) {
-  for (const ctx of windowContexts.values()) {
-    ctx.refreshExtensionsForPartition?.(partition);
-  }
+// electron-chrome-extensions' host callbacks (createTab/selectTab/removeTab)
+// only get a WebContents/BaseWindow, not "which of our windows" — several
+// Woowil windows can share the same profile partition, so pick whichever one
+// is focused (falling back to any), same pattern as the existing
+// second-instance handler.
+function findWindowContextForPartition(partition) {
+  const contexts = [...windowContexts.values()].filter((c) => c.currentPartition() === partition);
+  return contexts.find((c) => c.win.isFocused()) || contexts[0] || null;
 }
+
+// partition -> ElectronChromeExtensions instance, so ensureExtensionsHandled
+// stays idempotent the same way as everything else in this file.
+const chromeExtensionsApiByPartition = new Map();
 
 // Only wires up the session's extension-loaded/-unloaded listeners and
 // kicks off loading once per partition (mirrors ensureAdBlockHandled/
@@ -378,18 +387,49 @@ function ensureExtensionsHandled(partition, profileId, store) {
   // (loadExtension, removeExtension, getAllExtensions, the loaded/unloaded
   // events) exists and works under .extensions with a standalone sanity
   // script before wiring this up for real.
-  const extensions = session.fromPartition(partition).extensions;
+  const ses = session.fromPartition(partition);
+  const extensions = ses.extensions;
   const extMap = new Map();
   loadedExtensionsByPartition.set(partition, extMap);
 
   extensions.on('extension-loaded', (_event, extension) => {
     extMap.set(extension.id, extensionMetadata(extension));
-    broadcastExtensionsForPartition(partition);
   });
   extensions.on('extension-unloaded', (_event, extension) => {
     extMap.delete(extension.id);
-    broadcastExtensionsForPartition(partition);
   });
+
+  // Electron's own extensions support only implements a subset of the
+  // chrome.* surface, focused on DevTools - concepts like chrome.tabs,
+  // chrome.windows and popups aren't known to it at all (Electron's own
+  // docs say as much). electron-chrome-extensions fills that gap; without
+  // it, real extensions that rely on those APIs (e.g. Bitwarden calling
+  // chrome.tabs.getCurrent()) throw immediately and their popup hangs on
+  // its own loading screen forever - confirmed live before adding this.
+  // GPL-3.0 licensed, same as this app since going open source, so no
+  // licensing conflict; the `license` string below just tells the library
+  // which one applies. (crx:// protocol handling for <browser-action-list>'s
+  // icons is registered once on the default session in app.whenReady()
+  // below, not per-partition — see the comment there.)
+  const chromeExtensionsApi = new ElectronChromeExtensions({
+    session: ses,
+    license: 'GPL-3.0',
+    async createTab(details) {
+      const target = findWindowContextForPartition(partition);
+      if (!target) {
+        throw new Error('Intet vindue at åbne fanen i.');
+      }
+      const webContents = target.createExtensionTab(details.url);
+      return [webContents, target.win];
+    },
+    selectTab(tab) {
+      findWindowContextForPartition(partition)?.switchTabByWebContents(tab);
+    },
+    removeTab(tab) {
+      findWindowContextForPartition(partition)?.closeTabByWebContents(tab);
+    },
+  });
+  chromeExtensionsApiByPartition.set(partition, chromeExtensionsApi);
 
   for (const entry of store.getExtensionEntries(profileId)) {
     if (!entry.enabled) {
@@ -536,14 +576,14 @@ function createWindow(store, opts = {}) {
 
   const toolbar = new WebContentsView({
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      // Bundled (see scripts/bundle-preloads.js) - combines preload.js with
+      // electron-chrome-extensions' browser-action preload, required since
+      // this view is sandboxed and can't require() npm packages directly.
+      preload: path.join(__dirname, 'toolbar-preload.bundle.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
-  });
-  toolbar.webContents.loadFile(path.join(__dirname, 'renderer', 'toolbar.html'), {
-    query: { incognito: incognito ? '1' : '' },
   });
   win.contentView.addChildView(toolbar);
 
@@ -561,6 +601,22 @@ function createWindow(store, opts = {}) {
   let activeTabId = null;
   let nextTabId = 1;
   let currentProfileId = store.getActiveProfileId();
+
+  // Must happen before the toolbar's own page loads: its <browser-action-
+  // list> queries "the active tab's extensions" over IPC as soon as it
+  // mounts, and electron-chrome-extensions only registers that IPC channel
+  // (a single app-wide singleton, "RoutingDelegate") the first time a
+  // ElectronChromeExtensions instance is constructed anywhere. Constructing
+  // it lazily on first tab creation (as ensureExtensionsHandled otherwise
+  // only does) was too late — confirmed live: the toolbar's query lost the
+  // race, failed once with "No handler registered for 'crx-msg-remote'",
+  // and never automatically retried, leaving the action list permanently
+  // empty for that window.
+  ensureExtensionsHandled(incognito ? incognitoPartition : 'persist:profile-' + currentProfileId, currentProfileId, store);
+
+  toolbar.webContents.loadFile(path.join(__dirname, 'renderer', 'toolbar.html'), {
+    query: { incognito: incognito ? '1' : '' },
+  });
   // While the side panel is open, the toolbar view is grown to cover the
   // whole window (see setPanelOpen) so its own DOM can render the panel
   // over the page below; layout() must not then shrink it back down.
@@ -575,11 +631,6 @@ function createWindow(store, opts = {}) {
   let pushExtra = 0;
   let floatExtra = 0;
   let pendingPermission = null;
-  // The currently-shown extension popup (chrome-extension://<id>/popup.html
-  // in its own WebContentsView, positioned under the toolbar button that
-  // opened it) — see extensionAction() below. null when none is open.
-  let extensionPopupView = null;
-  let extensionPopupOwnerId = null;
   const closedTabs = [];
   const downloads = incognito ? [] : store.getDownloads(currentProfileId);
   const activeDownloadItems = new Map();
@@ -965,75 +1016,6 @@ function createWindow(store, opts = {}) {
     return incognito ? incognitoPartition : 'persist:profile-' + currentProfileId;
   }
 
-  function sendExtensions() {
-    const extMap = loadedExtensionsByPartition.get(currentPartition());
-    const list = extMap ? [...extMap.values()].map(({ popupPath, storageId, ...rest }) => rest) : [];
-    toolbar.webContents.send('extensions', list);
-  }
-
-  function closeExtensionPopup() {
-    if (!extensionPopupView) {
-      return;
-    }
-    // Clear state BEFORE tearing the view down, not after: removeChildView
-    // can itself synchronously fire the popup's own 'blur' listener (set up
-    // in extensionAction below) as a side effect of losing focus/being
-    // detached — if that re-enters this function while extensionPopupView
-    // still pointed at the (now half-destroyed) view, it double-closed the
-    // same webContents and hung the whole app (confirmed live: the window
-    // froze and even the DevTools protocol stopped responding). With state
-    // cleared first, that re-entrant call sees extensionPopupView as null
-    // and does nothing.
-    const view = extensionPopupView;
-    extensionPopupView = null;
-    extensionPopupOwnerId = null;
-    win.contentView.removeChildView(view);
-    view.webContents.close();
-  }
-
-  // `rect` is the clicked toolbar button's own getBoundingClientRect()
-  // (plain {left, right, bottom} object sent over IPC), used to position
-  // the popup directly under it — Chrome extension popups have no native
-  // window of their own here (this app builds its own toolbar chrome from
-  // scratch), so this is a real WebContentsView loaded to the extension's
-  // own chrome-extension:// origin, not an element inside the toolbar's
-  // page. Toggling the same button again closes it; clicking a different
-  // extension's button switches straight to that one.
-  function extensionAction(extensionId, rect) {
-    if (extensionPopupOwnerId === extensionId) {
-      closeExtensionPopup();
-      return;
-    }
-    closeExtensionPopup();
-    const extMap = loadedExtensionsByPartition.get(currentPartition());
-    const meta = extMap && extMap.get(extensionId);
-    if (!meta || !meta.hasPopup) {
-      return;
-    }
-    const popupWidth = 360;
-    const popupHeight = 500;
-    const bounds = win.getBounds();
-    const x = Math.min(Math.max(0, Math.round((rect?.right || 0) - popupWidth)), Math.max(0, bounds.width - popupWidth));
-    const y = Math.round(rect?.bottom || TOOLBAR_HEIGHT);
-    const view = new WebContentsView({
-      webPreferences: { partition: currentPartition(), contextIsolation: true, nodeIntegration: false, sandbox: true },
-    });
-    view.setBounds({ x, y, width: popupWidth, height: Math.min(popupHeight, Math.max(120, bounds.height - y - 8)) });
-    win.contentView.addChildView(view);
-    view.webContents.loadURL(`chrome-extension://${extensionId}/${meta.popupPath}`);
-    // Real browsers close an extension popup the instant it loses focus
-    // (click anywhere else, including into the page) — webContents' own
-    // 'blur' event covers that without needing a separate outside-click
-    // listener.
-    view.webContents.on('blur', () => {
-      if (extensionPopupView === view) {
-        closeExtensionPopup();
-      }
-    });
-    extensionPopupView = view;
-    extensionPopupOwnerId = extensionId;
-  }
-
   // For the woowil://extensions management page: every installed
   // extension for this profile, enabled or not (loadedExtensionsByPartition
   // only ever has the currently-*loaded*, i.e. enabled, ones — a disabled
@@ -1236,6 +1218,7 @@ function createWindow(store, opts = {}) {
     const tab = { id: nextTabId++, view, title: 'Ny fane', workspaceId: workspaceId || activeWorkspaceId };
     tabs.push(tab);
     tabContextMap.set(view.webContents.id, ctx);
+    chromeExtensionsApiByPartition.get(partition)?.addTab(view.webContents, win);
 
     view.webContents.on('before-input-event', (event, input) => {
       if (handleShortcut(input)) {
@@ -1346,6 +1329,7 @@ function createWindow(store, opts = {}) {
     layout();
     win.setTitle((incognito ? '🕶 ' : '') + (tab.title || 'Woowil'));
     toolbar.webContents.send('address', tab.view.webContents.getURL());
+    chromeExtensionsApiByPartition.get(currentPartition())?.selectTab(tab.view.webContents);
     sendNavState();
     sendBookmarkState();
     sendZoom();
@@ -1359,6 +1343,7 @@ function createWindow(store, opts = {}) {
     }
     const [tab] = tabs.splice(index, 1);
     tabContextMap.delete(tab.view.webContents.id);
+    chromeExtensionsApiByPartition.get(currentPartition())?.removeTab(tab.view.webContents);
     closedTabs.unshift({ url: tab.view.webContents.getURL(), workspaceId: tab.workspaceId });
     closedTabs.length = Math.min(closedTabs.length, 20);
     const wasActive = tab.id === activeTabId;
@@ -1554,14 +1539,13 @@ function createWindow(store, opts = {}) {
   // Switches without any password check; only call once the caller has
   // confirmed access (see requestSwitchProfile/unlockProfile below).
   function activateProfile(id) {
-    closeExtensionPopup();
     closeAllTabs();
     currentProfileId = id;
     store.setActiveProfileId(id);
     sendProfiles();
     sendTheme();
     sendBookmarksBar();
-    sendExtensions();
+    toolbar.webContents.send('extensions-partition', currentPartition());
     loadWorkspacesAndOpenTabs(true);
   }
 
@@ -1741,6 +1725,23 @@ function createWindow(store, opts = {}) {
 
   ctx = {
     win,
+    currentPartition,
+    // For electron-chrome-extensions' createTab/selectTab/removeTab host
+    // callbacks (see ensureExtensionsHandled) - they only get a
+    // WebContents, not our own tab id, so these look tabs up the other way
+    // round from the usual switchTab/closeTab(id).
+    createExtensionTab: (url) => {
+      const id = createTab(url);
+      return tabs.find((t) => t.id === id)?.view.webContents ?? null;
+    },
+    switchTabByWebContents: (wc) => {
+      const tab = tabs.find((t) => t.view.webContents === wc);
+      if (tab) { switchToTab(tab.id); }
+    },
+    closeTabByWebContents: (wc) => {
+      const tab = tabs.find((t) => t.view.webContents === wc);
+      if (tab) { closeTab(tab.id); }
+    },
     openExternalUrl: (url) => {
       if (win.isMinimized()) { win.restore(); }
       win.show();
@@ -1816,12 +1817,6 @@ function createWindow(store, opts = {}) {
     cancelDownload: cancelDownloadAction,
     openDownload: openDownloadAction,
     showDownloadInFolder: showDownloadInFolderAction,
-    extensionAction,
-    refreshExtensionsForPartition: (partition) => {
-      if (currentPartition() === partition) {
-        sendExtensions();
-      }
-    },
     getExtensionsPage,
     installExtensionFromDirectory,
     installExtensionFromArchive,
@@ -1848,7 +1843,7 @@ function createWindow(store, opts = {}) {
     sendTheme();
     sendBookmarksBar();
     sendDownloadsBadge();
-    sendExtensions();
+    toolbar.webContents.send('extensions-partition', currentPartition());
     loadWorkspacesAndOpenTabs(opts.isInitial);
     if (opts.startupUrl) {
       createTab(opts.startupUrl, activeWorkspaceId);
@@ -1895,7 +1890,6 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil:find-in-page', (event, text, options) => ctxFor(event)?.findInPage(text, options));
   ipcMain.on('woowil:close-find-bar', (event) => ctxFor(event)?.closeFindBar());
   ipcMain.on('woowil:respond-permission', (event, id, allow) => ctxFor(event)?.respondPermission(id, allow));
-  ipcMain.on('woowil:extension-action', (event, extensionId, rect) => ctxFor(event)?.extensionAction(extensionId, rect));
   ipcMain.on('woowil:new-window', (event) => ctxFor(event)?.newWindow());
   ipcMain.on('woowil:new-incognito-window', (event) => ctxFor(event)?.newIncognitoWindow());
   ipcMain.on('woowil:restart-and-update', (event) => ctxFor(event)?.restartAndUpdate());
@@ -2020,6 +2014,14 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(() => {
     // Handles the toolbar view, which uses the default session.
     protocol.handle('woowil', servePage);
+    // <browser-action-list> (in the toolbar, also on the default session)
+    // fetches its extension icons over crx://. The handler resolves the
+    // *target* profile's session itself from a ?partition= query param on
+    // each request (see electron-chrome-extensions' own handleCRXProtocol
+    // source) — registering it here once on the default session is enough,
+    // it does not need repeating per-profile the way ensureExtensionsHandled
+    // sets up the rest of the extensions plumbing.
+    ElectronChromeExtensions.handleCRXProtocol(session.defaultSession);
     const store = new ProfileStore(app.getPath('userData'));
     registerIpcHandlers(store);
     setupAutoUpdater();

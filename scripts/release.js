@@ -141,6 +141,9 @@ async function main() {
 
   fs.rmSync(DIST, { recursive: true, force: true });
 
+  console.log('→ bundler preloads');
+  execFileSync('node', [path.join(ROOT, 'scripts/bundle-preloads.js')], { cwd: ROOT, stdio: 'inherit' });
+
   build(['--linux', 'AppImage', '-c.publish.token=' + runtimeToken]);
 
   const winTarget = hasWine() ? 'nsis' : 'portable';
