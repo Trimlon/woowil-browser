@@ -528,7 +528,8 @@ globen ingenting.
 ## Nuværende status (opdatér denne sektion når noget ændrer sig)
 
 - Seneste version: se `package.json` (bumpes ved hver release).
-- GitHub: privat repo `Trimlon/woowil-browser`, gren `main`.
+- GitHub: **offentligt** repo `Trimlon/woowil-browser` (GPL-3.0-or-later
+  siden v0.2.6), gren `main`.
 - Kørende hos brugeren: primært en rigtig Woowil OS-installation nu (efter
   at have skiftet fra almindelig Arch). Udvikling/test i denne session er
   foregået på en delt, fjernstyret cloud-udviklingsmaskine (KDE + krdp) —
