@@ -237,9 +237,25 @@ class ProfileStore {
   }
 
   removeExtensionEntry(id, storageId) {
-    const entries = this.getExtensionEntries(id).filter((entry) => entry.storageId !== storageId);
+    const before = this.getExtensionEntries(id);
+    const entries = before.filter((entry) => entry.storageId !== storageId);
+    if (entries.length === before.length) {
+      // storageId didn't match a real, installed extension - a no-op, not
+      // an error. Also guards the fs.rmSync below: without this check, a
+      // caller could pass an arbitrary string (e.g. "../../../../etc") and
+      // have it deleted, since storageId is otherwise trusted unchecked.
+      return entries;
+    }
     writeJSON(path.join(this.profileDir(id), 'extensions.json'), entries);
-    fs.rmSync(path.join(this.extensionsDir(id), storageId), { recursive: true, force: true });
+    const extensionsDir = this.extensionsDir(id);
+    const targetDir = path.join(extensionsDir, storageId);
+    // Belt-and-suspenders, same pattern as servePage()'s own containment
+    // check: even though storageId is now confirmed to match a real entry,
+    // never rmSync a path that resolves outside extensionsDir.
+    if (targetDir === extensionsDir || !targetDir.startsWith(extensionsDir + path.sep)) {
+      return entries;
+    }
+    fs.rmSync(targetDir, { recursive: true, force: true });
     return entries;
   }
 

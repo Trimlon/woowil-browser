@@ -1266,9 +1266,20 @@ function createWindow(store, opts = {}) {
   }
 
   async function setExtensionEnabledPage(storageId, enabled) {
+    const isRealEntry = store.getExtensionEntries(currentProfileId).some((e) => e.storageId === storageId);
+    if (!isRealEntry) {
+      return getExtensionsPage();
+    }
     store.setExtensionEnabled(currentProfileId, storageId, enabled);
     if (enabled) {
-      const extPath = path.join(store.extensionsDir(currentProfileId), storageId);
+      const extensionsDir = store.extensionsDir(currentProfileId);
+      const extPath = path.join(extensionsDir, storageId);
+      // Same containment check as servePage()/removeExtensionEntry() -
+      // storageId is confirmed real above, but never let a crafted id
+      // resolve to a directory outside this profile's own extensions/.
+      if (extPath === extensionsDir || !extPath.startsWith(extensionsDir + path.sep)) {
+        return getExtensionsPage();
+      }
       try {
         await loadOneExtension(currentPartition(), extPath);
       } catch (err) {
@@ -1311,8 +1322,18 @@ function createWindow(store, opts = {}) {
   // Chrome's own "name,url,username,password" header/column order - not
   // arbitrary, this is the de-facto interchange format every other browser
   // and most third-party password managers already know how to import.
+  // Guards against CSV formula injection (OWASP): a username is captured
+  // verbatim from whatever a login form's field contained at submit time
+  // (see pages-preload.js), so a malicious site could plant a "credential"
+  // whose username is a spreadsheet formula payload (=HYPERLINK(...) etc).
+  // Prefixing with a leading ' neutralizes it in Excel/LibreOffice/Sheets
+  // without changing the visible value for any normal, non-formula field.
   function csvField(value) {
-    return `"${String(value ?? '').replace(/"/g, '""')}"`;
+    let str = String(value ?? '');
+    if (/^[=+\-@\t\r]/.test(str)) {
+      str = "'" + str;
+    }
+    return `"${str.replace(/"/g, '""')}"`;
   }
 
   async function exportPasswordsPage() {

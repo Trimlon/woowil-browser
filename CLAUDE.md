@@ -511,6 +511,43 @@ KDE/KWallet-session) før dette regnes for færdigt testet - samme
 "kan ikke verificeres i sandbox, spørg brugeren"-mønster som de native
 fil-dialoger og AltGr-tastatur-kvirken andetsteds i denne fil.
 
+## Sikkerhedsfund fra en review (rettet)
+
+Tre reelle, ikke-teoretiske huller fundet ved en sikkerhedsgennemgang af
+password manager-koden, alle rettet og verificeret live:
+
+- **Path traversal → vilkårlig rekursiv filsletning i `ProfileStore.
+  removeExtensionEntry()`** (`src/profile-store.js`) - `fs.rmSync(...,
+  {recursive:true, force:true})` kørte tidligere ubetinget på en sti bygget
+  fra `storageId`, uden at tjekke at id'et matchede en reelt installeret
+  udvidelse, og uden den samme "bliv-inden-for-mappen"-kontrol som
+  `servePage()` allerede har. Nås via `window.woowilPages.
+  removeExtension(storageId)`, tilgængelig fra al JS med fodfæste på en
+  `woowil://`-side. Rettet med to spærringer: (1) no-op hvis `storageId`
+  ikke matcher en eksisterende post, (2) samme `startsWith(extensionsDir +
+  path.sep)`-indeslutningstjek som `servePage()`. Samme mangel fandtes i
+  `setExtensionEnabledPage()` (`src/main.js`) - kunne indlæse en vilkårlig
+  mappe som "udvidelse" - rettet med samme to spærringer.
+  **Verificeret live**: et angreb med `storageId =
+  "../../../../../../tmp/pwned-canary-dir"` mod begge funktioner returnerer
+  nu uændret liste og rører aldrig filsystemet udenfor `extensions/` (en
+  kanariefil udenfor blev bekræftet urørt); normal aktiver/deaktiver/fjern
+  af en rigtig installeret udvidelse (testet mod den ægte Bitwarden-
+  udvidelse) virker uændret.
+- **CSV-formula-injection i adgangskode-eksport** (`csvField()` i
+  `src/main.js`) - et brugernavn fanges verbatim fra et login-felt på en
+  hvilken som helst besøgt side (se `pages-preload.js`), så en ondsindet
+  side kunne plante en "credential" hvis brugernavn er en
+  regnearks-formel-payload (`=HYPERLINK(...)` osv.) - klassisk OWASP
+  CSV-injection, rammer hvis den eksporterede fil åbnes i Excel/
+  LibreOffice/Sheets. Rettet ved at prefixe enhver værdi der starter med
+  `=`/`+`/`-`/`@`/tab/CR med et foranstillet `'`, som neutraliserer
+  formlen uden at ændre den synlige værdi for normale felter.
+  **Verificeret** (isoleret enhedstest af selve funktionen, da hele
+  eksport-flowet kræver et rigtigt `safeStorage`-kald som hænger i dette
+  sandboxede miljø - se ovenfor): formel-payloads får korrekt `'`-prefix,
+  normale værdier og eksisterende anførselstegn-escaping er upåvirket.
+
 ## Filoversigt
 
 - `src/main.js` — main-process. Alt: vinduer, faner, arbejdsområder, profiler,
