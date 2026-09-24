@@ -59,6 +59,28 @@
       .empty {
         color: var(--text-secondary);
       }
+      .toolbar-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 0.6rem;
+      }
+      .toolbar-row button {
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg-elevated);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .error {
+        color: #c0392b;
+        font-size: 13px;
+        margin-top: 0.6rem;
+      }
+      .error.hidden {
+        display: none;
+      }
       .remove {
         border: none;
         background: transparent;
@@ -70,10 +92,21 @@
   </head>
   <body>
     <h1>Favoritter</h1>
+    <div class="toolbar-row">
+      <button id="export-btn" type="button">Eksportér bogmærker…</button>
+    </div>
+    <p class="error hidden" id="error"></p>
     <ul id="list"></ul>
 
     <script>
       const list = document.getElementById('list');
+      const exportBtn = document.getElementById('export-btn');
+      const errorEl = document.getElementById('error');
+
+      function showError(message) {
+        errorEl.textContent = message || '';
+        errorEl.classList.toggle('hidden', !message);
+      }
 
       function render(bookmarks) {
         list.innerHTML = '';
@@ -107,6 +140,14 @@
       });
       window.woowilPages.onThemeChange((theme) => {
         document.documentElement.dataset.theme = theme;
+      });
+
+      exportBtn.addEventListener('click', async () => {
+        showError(null);
+        const result = await window.woowilPages.exportBookmarks();
+        if (result.error) {
+          showError(result.error);
+        }
       });
     </script>
   </body>

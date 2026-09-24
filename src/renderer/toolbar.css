@@ -380,7 +380,8 @@ body {
 
 .find-bar,
 .permission-bar,
-.update-bar {
+.update-bar,
+.password-bar {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -392,7 +393,8 @@ body {
   font-size: 13px;
 }
 .permission-bar,
-.update-bar {
+.update-bar,
+.password-bar {
   height: 40px;
 }
 
@@ -412,7 +414,8 @@ body {
   white-space: nowrap;
 }
 .find-bar button,
-.permission-bar button {
+.permission-bar button,
+.password-bar button {
   height: 24px;
   min-width: 24px;
   cursor: pointer;
@@ -423,22 +426,29 @@ body {
 }
 
 .permission-bar #permission-text,
-.update-bar #update-text {
+.update-bar #update-text,
+.password-bar #password-text {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .permission-bar button,
-.update-bar button {
+.update-bar button,
+.password-bar button {
   height: 28px;
   padding: 0 10px;
 }
 #permission-allow,
-#update-restart {
+#update-restart,
+#password-save {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
+}
+#password-dismiss {
+  min-width: 24px;
+  padding: 0;
 }
 
 #incognito-badge {

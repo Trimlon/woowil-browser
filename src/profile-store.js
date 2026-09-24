@@ -252,6 +252,68 @@ class ProfileStore {
     }
     return entries;
   }
+
+  // Passwords: only ever stores what main.js already encrypted with
+  // Electron's safeStorage (OS keychain/DPAPI/libsecret) — this file never
+  // sees a plaintext password, on purpose, so a plain `cat` of this JSON on
+  // disk is useless without also having access to the same OS account's
+  // keyring/credential store safeStorage relies on.
+  getCredentials(id) {
+    return readJSON(path.join(this.profileDir(id), 'credentials.json'), []);
+  }
+
+  // Matches on (origin, username): resubmitting the same login updates the
+  // stored password instead of piling up duplicates, same as every real
+  // browser's password manager.
+  upsertCredential(id, { origin, username, encryptedPassword }) {
+    const credentials = this.getCredentials(id);
+    const existing = credentials.find((c) => c.origin === origin && c.username === username);
+    if (existing) {
+      existing.encryptedPassword = encryptedPassword;
+      existing.updatedAt = Date.now();
+    } else {
+      credentials.push({
+        id: crypto.randomUUID(),
+        origin,
+        username,
+        encryptedPassword,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
+    writeJSON(path.join(this.profileDir(id), 'credentials.json'), credentials);
+    return credentials;
+  }
+
+  findCredential(id, credentialId) {
+    return this.getCredentials(id).find((c) => c.id === credentialId);
+  }
+
+  findCredentialsForOrigin(id, origin) {
+    return this.getCredentials(id).filter((c) => c.origin === origin);
+  }
+
+  removeCredential(id, credentialId) {
+    const credentials = this.getCredentials(id).filter((c) => c.id !== credentialId);
+    writeJSON(path.join(this.profileDir(id), 'credentials.json'), credentials);
+    return credentials;
+  }
+
+  // Sites the user explicitly said "don't ask again" for — checked before
+  // ever showing the save-password bar, so declining once doesn't nag on
+  // every subsequent login to the same site.
+  getNeverSaveOrigins(id) {
+    return readJSON(path.join(this.profileDir(id), 'never-save-origins.json'), []);
+  }
+
+  addNeverSaveOrigin(id, origin) {
+    const origins = this.getNeverSaveOrigins(id);
+    if (!origins.includes(origin)) {
+      origins.push(origin);
+      writeJSON(path.join(this.profileDir(id), 'never-save-origins.json'), origins);
+    }
+    return origins;
+  }
 }
 
 module.exports = { ProfileStore };

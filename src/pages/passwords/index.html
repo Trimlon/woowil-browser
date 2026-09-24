@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8" />
+    <title>Adgangskoder</title>
+    <style>
+      :root {
+        --bg: #f7f7fb;
+        --bg-elevated: #ffffff;
+        --text: #1b1b1f;
+        --text-secondary: #55525f;
+        --border: #ddd9e6;
+        --input-bg: #ffffff;
+        --accent: #9a29d6;
+        --accent2: #17aee0;
+      }
+      :root[data-theme='dark'] {
+        --bg: #14121b;
+        --bg-elevated: #1e1b29;
+        --text: #f2eefc;
+        --text-secondary: #b8b0cc;
+        --border: #34304a;
+        --input-bg: #241f33;
+        --accent: #d03cff;
+        --accent2: #24d8ff;
+      }
+
+      body {
+        font-family: sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        max-width: 640px;
+        margin: 3rem auto;
+        padding: 0 1rem;
+        transition: background 0.2s, color 0.2s;
+      }
+      h1 {
+        font-size: 1.4rem;
+      }
+      .hint {
+        color: var(--text-secondary);
+        font-size: 13px;
+        margin-top: 0.3rem;
+      }
+      .toolbar-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 1.2rem;
+      }
+      .toolbar-row input {
+        flex: 1;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--input-bg);
+        color: var(--text);
+        font-size: 14px;
+      }
+      .toolbar-row button {
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg-elevated);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      .error {
+        color: #c0392b;
+        font-size: 13px;
+        margin-top: 0.6rem;
+      }
+      .error.hidden {
+        display: none;
+      }
+      .credential-list {
+        margin-top: 1.5rem;
+      }
+      .credential-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-elevated);
+        margin-bottom: 10px;
+      }
+      .credential-info {
+        flex: 1;
+        min-width: 0;
+      }
+      .credential-origin {
+        font-weight: 600;
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .credential-username {
+        color: var(--text-secondary);
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .credential-password {
+        font-family: monospace;
+        font-size: 13px;
+        color: var(--text-secondary);
+        min-width: 90px;
+      }
+      .credential-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .credential-actions button {
+        border: 1px solid var(--border);
+        background: var(--input-bg);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 12px;
+        padding: 6px 10px;
+        border-radius: 4px;
+      }
+      .remove-btn {
+        color: #c0392b;
+      }
+      .empty-hint {
+        color: var(--text-secondary);
+        font-size: 14px;
+        margin-top: 1.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Adgangskoder</h1>
+    <p class="hint">
+      Gemte adgangskoder krypteres med din computers egen nøglering og udfyldes automatisk næste gang du besøger
+      siden.
+    </p>
+
+    <div class="toolbar-row">
+      <input id="search-input" type="text" placeholder="Søg efter side eller brugernavn…" />
+      <button id="export-btn" type="button">Eksportér…</button>
+    </div>
+    <p class="error hidden" id="error"></p>
+
+    <div class="credential-list" id="credential-list"></div>
+
+    <script>
+      const searchInput = document.getElementById('search-input');
+      const exportBtn = document.getElementById('export-btn');
+      const errorEl = document.getElementById('error');
+      const listEl = document.getElementById('credential-list');
+
+      let allCredentials = [];
+
+      function showError(message) {
+        if (message) {
+          errorEl.textContent = message;
+          errorEl.classList.remove('hidden');
+        } else {
+          errorEl.classList.add('hidden');
+        }
+      }
+
+      function applyTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+      }
+      window.woowilPages.getSettings().then((settings) => applyTheme(settings.theme));
+      window.woowilPages.onThemeChange(applyTheme);
+
+      function renderCredentials() {
+        const query = searchInput.value.trim().toLowerCase();
+        const credentials = allCredentials.filter(
+          (c) => c.origin.toLowerCase().includes(query) || c.username.toLowerCase().includes(query)
+        );
+
+        listEl.innerHTML = '';
+        if (credentials.length === 0) {
+          listEl.innerHTML = `<p class="empty-hint">${
+            allCredentials.length === 0 ? 'Ingen gemte adgangskoder endnu.' : 'Ingen resultater.'
+          }</p>`;
+          return;
+        }
+
+        for (const credential of credentials) {
+          const item = document.createElement('div');
+          item.className = 'credential-item';
+
+          const info = document.createElement('div');
+          info.className = 'credential-info';
+          const origin = document.createElement('div');
+          origin.className = 'credential-origin';
+          origin.textContent = credential.origin;
+          const username = document.createElement('div');
+          username.className = 'credential-username';
+          username.textContent = credential.username || '(intet brugernavn)';
+          info.append(origin, username);
+          item.appendChild(info);
+
+          const password = document.createElement('span');
+          password.className = 'credential-password';
+          password.textContent = '••••••••';
+          item.appendChild(password);
+
+          const actions = document.createElement('div');
+          actions.className = 'credential-actions';
+
+          const showBtn = document.createElement('button');
+          showBtn.type = 'button';
+          showBtn.textContent = 'Vis';
+          let revealed = false;
+          showBtn.addEventListener('click', async () => {
+            if (revealed) {
+              password.textContent = '••••••••';
+              showBtn.textContent = 'Vis';
+              revealed = false;
+              return;
+            }
+            const result = await window.woowilPages.revealPassword(credential.id);
+            if (result.error) {
+              showError(result.error);
+              return;
+            }
+            password.textContent = result.password;
+            showBtn.textContent = 'Skjul';
+            revealed = true;
+          });
+          actions.appendChild(showBtn);
+
+          const removeBtn = document.createElement('button');
+          removeBtn.className = 'remove-btn';
+          removeBtn.type = 'button';
+          removeBtn.textContent = 'Fjern';
+          removeBtn.addEventListener('click', async () => {
+            if (!confirm(`Fjern den gemte adgangskode til "${credential.origin}"?`)) {
+              return;
+            }
+            allCredentials = await window.woowilPages.removePassword(credential.id);
+            renderCredentials();
+          });
+          actions.appendChild(removeBtn);
+
+          item.appendChild(actions);
+          listEl.appendChild(item);
+        }
+      }
+
+      window.woowilPages.getPasswords().then((credentials) => {
+        allCredentials = credentials;
+        renderCredentials();
+      });
+
+      searchInput.addEventListener('input', renderCredentials);
+
+      exportBtn.addEventListener('click', async () => {
+        showError(null);
+        const result = await window.woowilPages.exportPasswords();
+        if (result.error) {
+          showError(result.error);
+        }
+      });
+    </script>
+  </body>
+</html>

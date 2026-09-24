@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('woowil', {
   findInPage: (text, options) => ipcRenderer.send('woowil:find-in-page', text, options),
   closeFindBar: () => ipcRenderer.send('woowil:close-find-bar'),
   respondPermission: (id, allow) => ipcRenderer.send('woowil:respond-permission', id, allow),
+  respondPasswordPrompt: (action) => ipcRenderer.send('woowil:respond-password-prompt', action),
   newWindow: () => ipcRenderer.send('woowil:new-window'),
   newIncognitoWindow: () => ipcRenderer.send('woowil:new-incognito-window'),
   restartAndUpdate: () => ipcRenderer.send('woowil:restart-and-update'),
@@ -69,6 +70,8 @@ contextBridge.exposeInMainWorld('woowil', {
     ipcRenderer.on('downloads-badge', (_event, count) => callback(count)),
   onPermissionRequest: (callback) =>
     ipcRenderer.on('permission-request', (_event, data) => callback(data)),
+  onPasswordPrompt: (callback) =>
+    ipcRenderer.on('password-prompt', (_event, data) => callback(data)),
   onUpdateReady: (callback) =>
     ipcRenderer.on('update-ready', (_event, version) => callback(version)),
   onExtensionsPartition: (callback) =>

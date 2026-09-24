@@ -1,6 +1,6 @@
 {
   "name": "woowil",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "private": true,
   "description": "Woowil - a minimal custom browser built on Electron.",
   "author": "Trimlon",

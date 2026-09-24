@@ -44,6 +44,7 @@ const {
   shell,
   dialog,
   clipboard,
+  safeStorage,
 } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -70,6 +71,7 @@ const TOOLBAR_HEIGHT = 108;
 const FIND_BAR_HEIGHT = 36;
 const PERMISSION_BAR_HEIGHT = 40;
 const UPDATE_BAR_HEIGHT = 40;
+const PASSWORD_BAR_HEIGHT = 40;
 
 // Trim subsystems a minimal single-window browser has no use for.
 app.commandLine.appendSwitch('disable-background-networking');
@@ -170,7 +172,7 @@ const MIME_TYPES = {
 // by navigating a tab there — no exploit chain needed) escapes the pages/
 // directory entirely and serves the app's own source files as a "woowil:"
 // origin, which pages-preload.js otherwise trusts unconditionally.
-const KNOWN_PAGES = new Set(['newtab', 'settings', 'history', 'bookmarks', 'downloads', 'extensions']);
+const KNOWN_PAGES = new Set(['newtab', 'settings', 'history', 'bookmarks', 'downloads', 'extensions', 'passwords']);
 
 function servePage(request) {
   const url = new URL(request.url);
@@ -520,6 +522,31 @@ async function downloadWebStoreCrx(extensionId) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+// --- Password manager: encryption ---
+//
+// safeStorage encrypts through the OS's own credential store (libsecret on
+// Linux, DPAPI on Windows, Keychain on macOS) - profile-store.js's
+// credentials.json only ever holds the resulting ciphertext, never a
+// plaintext password. If no OS keyring/credential store is available at
+// all (confirmed possible on a bare Linux setup with no secret-service
+// running - same class of environment gap as woowil-mail's own keyring
+// fallback), safeStorage.isEncryptionAvailable() returns false; rather
+// than silently falling back to storing plaintext (a real security
+// regression a user would never notice), saving is refused outright with
+// a clear error.
+function encryptPassword(plainText) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error(
+      'Denne computer har ingen understøttet nøglering til at kryptere adgangskoder sikkert med - adgangskoden blev ikke gemt.'
+    );
+  }
+  return safeStorage.encryptString(plainText).toString('base64');
+}
+
+function decryptPassword(encryptedBase64) {
+  return safeStorage.decryptString(Buffer.from(encryptedBase64, 'base64'));
+}
+
 // event.sender -> window context, so the one-time IPC handlers below know
 // which window/profile a toolbar-originated message belongs to.
 const windowContexts = new Map();
@@ -628,9 +655,11 @@ function createWindow(store, opts = {}) {
   let findBarOpen = false;
   let permissionBannerOpen = false;
   let updateBannerOpen = false;
+  let passwordBannerOpen = false;
   let pushExtra = 0;
   let floatExtra = 0;
   let pendingPermission = null;
+  let pendingPasswordPrompt = null;
   const closedTabs = [];
   const downloads = incognito ? [] : store.getDownloads(currentProfileId);
   const activeDownloadItems = new Map();
@@ -655,7 +684,8 @@ function createWindow(store, opts = {}) {
     pushExtra =
       (findBarOpen ? FIND_BAR_HEIGHT : 0) +
       (permissionBannerOpen ? PERMISSION_BAR_HEIGHT : 0) +
-      (updateBannerOpen ? UPDATE_BAR_HEIGHT : 0);
+      (updateBannerOpen ? UPDATE_BAR_HEIGHT : 0) +
+      (passwordBannerOpen ? PASSWORD_BAR_HEIGHT : 0);
     layout();
   }
 
@@ -1012,6 +1042,83 @@ function createWindow(store, opts = {}) {
     toolbar.webContents.send('permission-request', null);
   }
 
+  // A tab's own preload (pages-preload.js) reported a login form submit.
+  // Skips the prompt entirely if it's an exact repeat of an already-saved
+  // login (nothing would change) or if this origin is on the "never save"
+  // list - otherwise shows the save-password bar, same visual pattern as
+  // the permission bar above.
+  function handlePasswordFormSubmit({ origin, username, password }) {
+    if (incognito || !origin || !password) {
+      return;
+    }
+    if (store.getNeverSaveOrigins(currentProfileId).includes(origin)) {
+      return;
+    }
+    const existing = store
+      .findCredentialsForOrigin(currentProfileId, origin)
+      .find((c) => c.username === username);
+    if (existing) {
+      try {
+        if (decryptPassword(existing.encryptedPassword) === password) {
+          return; // identical to what's already saved - nothing to ask about
+        }
+      } catch {
+        // Stored value couldn't be decrypted (e.g. keyring changed) - fall
+        // through and offer to save the new one rather than getting stuck.
+      }
+    }
+    pendingPasswordPrompt = { origin, username, password };
+    passwordBannerOpen = true;
+    updateExtras();
+    toolbar.webContents.send('password-prompt', { origin, username, isUpdate: Boolean(existing) });
+  }
+
+  function respondPasswordPrompt(action) {
+    const pending = pendingPasswordPrompt;
+    if (!pending) {
+      return;
+    }
+    pendingPasswordPrompt = null;
+    passwordBannerOpen = false;
+    updateExtras();
+    toolbar.webContents.send('password-prompt', null);
+
+    if (action === 'save') {
+      try {
+        const encryptedPassword = encryptPassword(pending.password);
+        store.upsertCredential(currentProfileId, { origin: pending.origin, username: pending.username, encryptedPassword });
+      } catch (err) {
+        dialog.showErrorBox('Kunne ikke gemme adgangskoden', err.message);
+      }
+    } else if (action === 'never') {
+      store.addNeverSaveOrigin(currentProfileId, pending.origin);
+    }
+    // action === 'dismiss': do nothing, just close the bar (asks again next time).
+  }
+
+  // Called by a tab's preload on every page load - never exposed to the
+  // page itself, only ever reached over IPC from pages-preload.js's own
+  // isolated context.
+  function getAutofillForOrigin(origin) {
+    if (incognito) {
+      return null;
+    }
+    const matches = store.findCredentialsForOrigin(currentProfileId, origin);
+    if (matches.length === 0) {
+      return null;
+    }
+    // Multiple saved logins for one site: autofill the most recently
+    // used/saved one rather than showing a chooser - matches this
+    // feature's "simple first version" scope; the management page lists
+    // all of them for anyone who needs a different account.
+    const best = matches.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a));
+    try {
+      return { username: best.username, password: decryptPassword(best.encryptedPassword) };
+    } catch {
+      return null;
+    }
+  }
+
   function currentPartition() {
     return incognito ? incognitoPartition : 'persist:profile-' + currentProfileId;
   }
@@ -1174,6 +1281,122 @@ function createWindow(store, opts = {}) {
       }
     }
     return getExtensionsPage();
+  }
+
+  // For woowil://passwords: never includes the decrypted password itself -
+  // only revealPasswordPage() (an explicit, one-at-a-time user action)
+  // decrypts anything, keeping plaintext passwords out of the renderer's
+  // memory/devtools by default the same way a real browser's password
+  // manager page does.
+  function getPasswordsPage() {
+    return store
+      .getCredentials(currentProfileId)
+      .map(({ id, origin, username, updatedAt }) => ({ id, origin, username, updatedAt }))
+      .sort((a, b) => a.origin.localeCompare(b.origin, 'da') || a.username.localeCompare(b.username, 'da'));
+  }
+
+  function revealPasswordPage(id) {
+    const credential = store.findCredential(currentProfileId, id);
+    if (!credential) {
+      throw new Error('Adgangskoden findes ikke længere.');
+    }
+    return decryptPassword(credential.encryptedPassword);
+  }
+
+  function removePasswordPage(id) {
+    store.removeCredential(currentProfileId, id);
+    return getPasswordsPage();
+  }
+
+  // Chrome's own "name,url,username,password" header/column order - not
+  // arbitrary, this is the de-facto interchange format every other browser
+  // and most third-party password managers already know how to import.
+  function csvField(value) {
+    return `"${String(value ?? '').replace(/"/g, '""')}"`;
+  }
+
+  async function exportPasswordsPage() {
+    if (incognito) {
+      throw new Error('Kan ikke eksportere fra et privat vindue.');
+    }
+    const credentials = store.getCredentials(currentProfileId);
+    if (credentials.length === 0) {
+      throw new Error('Ingen gemte adgangskoder at eksportere.');
+    }
+    // Matches the same warning Chrome/Firefox show before a passwords
+    // export - the resulting file is plain, unencrypted text, unlike
+    // credentials.json which is only ever ciphertext at rest.
+    const confirmation = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Annuller', 'Eksportér'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Eksportér adgangskoder',
+      message: 'Adgangskoderne gemmes ukrypteret i den valgte fil.',
+      detail:
+        'Alle der har adgang til filen kan læse dine adgangskoder i klartekst. Slet filen igen når du er færdig med at bruge den.',
+    });
+    if (confirmation.response !== 1) {
+      return { canceled: true };
+    }
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Eksportér adgangskoder',
+      defaultPath: 'woowil-adgangskoder.csv',
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+    });
+    if (canceled || !filePath) {
+      return { canceled: true };
+    }
+    const rows = [['name', 'url', 'username', 'password'].map(csvField).join(',')];
+    for (const credential of credentials) {
+      let password;
+      try {
+        password = decryptPassword(credential.encryptedPassword);
+      } catch {
+        continue; // skip anything that can no longer be decrypted rather than fail the whole export
+      }
+      rows.push([credential.origin, credential.origin, credential.username, password].map(csvField).join(','));
+    }
+    fs.writeFileSync(filePath, rows.join('\r\n') + '\r\n', 'utf8');
+    return { canceled: false, savedTo: filePath };
+  }
+
+  // Netscape Bookmark File Format - the one universal import/export format
+  // every browser (Chrome, Firefox, Safari, Edge, ...) already understands,
+  // rather than a Woowil-specific JSON dump nothing else can read.
+  function escapeHtml(value) {
+    return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  async function exportBookmarksPage() {
+    const bookmarks = store.getBookmarks(currentProfileId);
+    if (bookmarks.length === 0) {
+      throw new Error('Ingen bogmærker at eksportere.');
+    }
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Eksportér bogmærker',
+      defaultPath: 'woowil-bogmaerker.html',
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+    });
+    if (canceled || !filePath) {
+      return { canceled: true };
+    }
+    const items = bookmarks
+      .map((b) => {
+        const addDate = Math.round((b.addedAt || Date.now()) / 1000);
+        return `    <DT><A HREF="${escapeHtml(b.url)}" ADD_DATE="${addDate}">${escapeHtml(b.title || b.url)}</A>`;
+      })
+      .join('\n');
+    const html =
+      '<!DOCTYPE NETSCAPE-Bookmark-file-1>\n' +
+      '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">\n' +
+      '<TITLE>Bookmarks</TITLE>\n' +
+      '<H1>Bookmarks</H1>\n' +
+      '<DL><p>\n' +
+      items +
+      '\n</DL><p>\n';
+    fs.writeFileSync(filePath, html, 'utf8');
+    return { canceled: false, savedTo: filePath };
   }
 
   function showUpdateReady(version) {
@@ -1787,6 +2010,9 @@ function createWindow(store, opts = {}) {
     findInPage,
     closeFindBar: () => setFindBarOpen(false),
     respondPermission,
+    respondPasswordPrompt,
+    handlePasswordFormSubmit,
+    getAutofillForOrigin,
     newWindow: () => createWindow(store),
     newIncognitoWindow: () => createWindow(store, { incognito: true }),
     getSettings: () => store.getSettings(currentProfileId),
@@ -1823,6 +2049,11 @@ function createWindow(store, opts = {}) {
     installExtensionFromWebStore,
     removeExtensionPage,
     setExtensionEnabledPage,
+    getPasswordsPage,
+    revealPasswordPage,
+    removePasswordPage,
+    exportPasswordsPage,
+    exportBookmarksPage,
   };
   windowContexts.set(toolbar.webContents.id, ctx);
 
@@ -1890,6 +2121,12 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil:find-in-page', (event, text, options) => ctxFor(event)?.findInPage(text, options));
   ipcMain.on('woowil:close-find-bar', (event) => ctxFor(event)?.closeFindBar());
   ipcMain.on('woowil:respond-permission', (event, id, allow) => ctxFor(event)?.respondPermission(id, allow));
+  ipcMain.on('woowil:respond-password-prompt', (event, action) => ctxFor(event)?.respondPasswordPrompt(action));
+  // From pages-preload.js's login-form listener/autofill request - runs on
+  // every regular tab, not just the toolbar or internal woowil:// pages,
+  // so these are looked up via tabCtxFor, not ctxFor.
+  ipcMain.on('woowil:password-form-submit', (event, data) => tabCtxFor(event)?.handlePasswordFormSubmit(data));
+  ipcMain.handle('woowil:get-autofill', (event, origin) => tabCtxFor(event)?.getAutofillForOrigin(origin) ?? null);
   ipcMain.on('woowil:new-window', (event) => ctxFor(event)?.newWindow());
   ipcMain.on('woowil:new-incognito-window', (event) => ctxFor(event)?.newIncognitoWindow());
   ipcMain.on('woowil:restart-and-update', (event) => ctxFor(event)?.restartAndUpdate());
@@ -1977,6 +2214,36 @@ function registerIpcHandlers(store) {
   ipcMain.handle('woowil-pages:set-extension-enabled', (event, storageId, enabled) =>
     tabCtxFor(event)?.setExtensionEnabledPage(storageId, enabled) ?? []
   );
+
+  ipcMain.handle('woowil-pages:get-passwords', (event) => tabCtxFor(event)?.getPasswordsPage() ?? []);
+  ipcMain.handle('woowil-pages:reveal-password', async (event, id) => {
+    const ctx = tabCtxFor(event);
+    if (!ctx) return { error: 'Intet vindue.' };
+    try {
+      return { password: ctx.revealPasswordPage(id) };
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
+  ipcMain.handle('woowil-pages:remove-password', (event, id) => tabCtxFor(event)?.removePasswordPage(id) ?? []);
+  ipcMain.handle('woowil-pages:export-passwords', async (event) => {
+    const ctx = tabCtxFor(event);
+    if (!ctx) return { error: 'Intet vindue.' };
+    try {
+      return await ctx.exportPasswordsPage();
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
+  ipcMain.handle('woowil-pages:export-bookmarks', async (event) => {
+    const ctx = tabCtxFor(event);
+    if (!ctx) return { error: 'Intet vindue.' };
+    try {
+      return await ctx.exportBookmarksPage();
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
 }
 
 // When Woowil is the OS default browser, xdg-open (or any other app - the

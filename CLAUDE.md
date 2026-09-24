@@ -404,6 +404,113 @@ installerer fra en udpakket mappe eller en .crx-/.zip-fil via
     blokerer den faktiske brug.
   - Udgivet som v0.2.6.
 
+## Password manager (gemme/udfylde brugernavne+adgangskoder, eksport)
+
+Endnu ikke udgivet i noget versionsnummer — bygget hen over flere sessioner,
+denne beskrivelse dækker det samlede resultat.
+
+- **Kryptering via `safeStorage` (OS'ets egen nøglering: libsecret/DPAPI/
+  Keychain), ikke selvskrevet kryptografi.** `encryptPassword`/
+  `decryptPassword` i `main.js` er tynde wrappere om
+  `safeStorage.encryptString`/`.decryptString`. Hvis
+  `safeStorage.isEncryptionAvailable()` er `false` (ingen understøttet
+  nøglering overhovedet), nægter appen bevidst at gemme i klartekst —
+  kaster i stedet en klar fejl, samme "fail loudly" -princip som
+  woowil-mails egen keyring-fallback.
+- **`credentials.json`/`never-save-origins.json` er nye per-profil-filer i
+  `profile-store.js`**, samme mønster som eksisterende bogmærker/historik/
+  udvidelser (`upsertCredential` matcher på origin+brugernavn og
+  opdaterer in-place, `findCredentialsForOrigin`, `addNeverSaveOrigin` osv.).
+- **Login-formular-detektion og autofill sker i `pages-preload.js`, uden
+  at eksponere NOGET kaldbart til selve siden** — `contextIsolation`
+  isolerer kun JS-objekter/globals mellem side og preload, ikke selve
+  DOM-træet, så preload-scriptet kan læse/skrive formularfelter direkte på
+  en hvilken som helst side uden en `contextBridge`-bro en ondsindet side
+  kunne misbruge. Formular-submit fanges i capture-fasen (ser stadig
+  submittet selvom sidens egen JS kalder `preventDefault()` og selv
+  håndterer login via `fetch`/XHR, meget almindeligt på moderne
+  login-sider), og autofill sker ved `DOMContentLoaded` via et
+  `ipcRenderer.invoke('woowil:get-autofill', location.origin)`-kald.
+- **Gem-adgangskode-bjælken i toolbaren følger nøjagtig samme mønster som
+  `permission-bar`/`update-bar`** — `main.js` sporer selv
+  `passwordBannerOpen`/`PASSWORD_BAR_HEIGHT` (40px, samme højde som de to
+  andre) og kalder `updateExtras()` til at ændre selve
+  `WebContentsView`'ens højde; `toolbar.js`/`.html`/`.css` viser/skjuler
+  bare `#password-bar` baseret på `password-prompt`-IPC-eventet, ingen
+  egen højde-logik nødvendig i renderer'en. Tre knapper: "Gem" (krypterer
+  og gemmer), "Aldrig for denne side" (`addNeverSaveOrigin`, ingen
+  kryptering involveret), "×" (Ikke nu — luk bjælken, spørg igen næste
+  gang). Panelet har et nyt "🔑 Adgangskoder"-link (samme
+  `data-nav`-mønster som de andre interne sider, ingen ekstra JS
+  nødvendig).
+- **`woowil://passwords`-siden viser ALDRIG en adgangskode i klartekst som
+  standard** — `getPasswordsPage()` returnerer kun id/origin/brugernavn/
+  opdateringstidspunkt; kun et eksplicit "Vis"-klik pr. række kalder
+  `revealPasswordPage(id)`, som dekrypterer netop den ene adgangskode. Har
+  søgefelt, "Skjul" til at maskere igen, og "Fjern" (med `confirm()`).
+  "Eksportér…"-knappen viser en `dialog.showMessageBox`-advarsel FØR selve
+  gem-dialogen (samme to-trins-advarsel som Chrome/Firefox selv viser før
+  en adgangskode-eksport), skriver Chromes eget CSV-format
+  (`name,url,username,password`) for interoperabilitet med andre
+  password-managere.
+- **Bogmærke-eksport bruger Netscape Bookmark File Format**
+  (`<!DOCTYPE NETSCAPE-Bookmark-file-1>`) — det universelle
+  import/eksport-format alle browsere allerede forstår, i stedet for et
+  Woowil-specifikt JSON-dump ingen andre kan læse. `exportBookmarksPage()`
+  i `main.js` var allerede færdig fra en tidligere session; det eneste der
+  manglede var selve "Eksportér bogmærker…"-knappen på
+  `woowil://bookmarks`-siden (nu tilføjet, samme fejlvisnings-mønster som
+  adgangskode-sidens eksportknap - `result.error` vises, `result.canceled`
+  ignoreres stille).
+
+### VIGTIGT: `safeStorage` kan fryse HELE hovedprocessen i dette
+sandboxede udviklingsmiljø — testet, ikke gættet
+
+Fundet ved rigtig, live test af "Gem"-knappen: at klikke den hængte
+appen fuldstændig (alle vinduer/faner, selve CDP-debug-forbindelsen
+holdt op med at svare) i titusindvis af millisekunder, gentagne gange.
+Roden er ikke en fejl i denne apps kode: `dbus/object_proxy.cc`-logs viste
+`org.kde.KWallet.open`/`.isEnabled`-kald der løb ud efter det klassiske
+D-Bus-timeout (~25 sekunder) med `DBus.Error.NoReply`, efterfulgt (på et
+senere forsøg) af et forsøg på at (gen)starte `kwalletd6` via den gamle
+`org.kde.KLauncher`-tjeneste, som fejlede med det samme
+(`ServiceUnknown: The name is not activatable`) — denne fjernstyrede
+udviklingsmaskines KDE-session er tydeligvis delvis/ufuldstændig (ingen
+rigtig `klauncher` kørende), ikke en fejl i selve Woowil Browser.
+
+**Hvorfor dette er værre end woowil-mails tilsvarende keyring-fund**:
+Electrons `safeStorage.encryptString()`/`.decryptString()` er 100%
+synkrone og blokerer bogstaveligt hele Electron-hovedprocessens
+event-loop, ikke bare én HTTP-request-handler-tråd som i Python/FastAPI.
+Der findes ingen async-variant af `safeStorage` at skifte til. Denne app
+kan derfor ikke selv forhindre en lignende fastfrysning på en rigtig
+brugers maskine, hvis DENNE brugers nøglering-daemon også skulle være
+langsom/utilgængelig et splitsekund - det er en grundlæggende
+Electron/OS-begrænsning, ikke noget der kan patches herfra.
+
+**Hvad der BLEV testet med succes i dette miljø** (alt hvad der ikke
+rører `safeStorage` direkte): formular-submit udløser bjælken med korrekt
+tekst, "Ikke nu" og "Aldrig for denne side" virker begge korrekt (ingen af
+dem kalder kryptering), et "aldrig gem"-origin viser aldrig bjælken igen
+ved efterfølgende submits, panel-linket navigerer korrekt til
+`woowil://passwords`, siden viser sin tomme-tilstand og eksportknappen
+findes, en bogmærke blev oprettet og vist korrekt på `woowil://bookmarks`
+med den nye eksportknap, og at klikke "Eksportér bogmærker…" åbnede den
+native gem-dialog uden at fryse processen (samme allerede-dokumenterede
+begrænsning som andre native dialoger i dette repo - selve
+dialog-interaktionen kan ikke automatiseres i sandboxen, men selve kaldet
+virker).
+
+**Hvad der IKKE kunne verificeres her**: at rent faktisk gemme en
+adgangskode (klik "Gem"), at genindlæse en side og se autofill ske, og at
+"Vis"-knappen på `woowil://passwords` rent faktisk dekrypterer noget - alt
+sammen fordi det kræver et rigtigt `safeStorage`-kald, som hænger i dette
+miljø. **Bed brugeren bekræfte disse tre specifikke ting på deres egen
+rigtige Woowil OS-maskine** (som har en normal, fuldt fungerende
+KDE/KWallet-session) før dette regnes for færdigt testet - samme
+"kan ikke verificeres i sandbox, spørg brugeren"-mønster som de native
+fil-dialoger og AltGr-tastatur-kvirken andetsteds i denne fil.
+
 ## Filoversigt
 
 - `src/main.js` — main-process. Alt: vinduer, faner, arbejdsområder, profiler,
@@ -427,7 +534,8 @@ installerer fra en udpakket mappe eller en .crx-/.zip-fil via
   find-bar, permission-banner, update-banner, workspace-switcher,
   extension-knapper).
 - `src/pages/` — interne `woowil://`-sider, serveret af `servePage()`,
-  inkl. `extensions/` (installer/liste/fjern udvidelser).
+  inkl. `extensions/` (installer/liste/fjern udvidelser) og `passwords/`
+  (liste/vis/fjern/eksportér gemte adgangskoder).
 - `scripts/release.js` — se "Udgivelse" nedenfor.
 
 ## Udgivelse / distribution — læs dette før du bygger noget

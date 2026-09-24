@@ -31,6 +31,12 @@ const updateText = document.getElementById('update-text');
 const updateRestart = document.getElementById('update-restart');
 const updateDismiss = document.getElementById('update-dismiss');
 
+const passwordBar = document.getElementById('password-bar');
+const passwordText = document.getElementById('password-text');
+const passwordSave = document.getElementById('password-save');
+const passwordNever = document.getElementById('password-never');
+const passwordDismiss = document.getElementById('password-dismiss');
+
 const activeProfileLabel = document.getElementById('active-profile-label');
 const panelToggleButton = document.getElementById('panel-toggle');
 const panelBackdrop = document.getElementById('panel-backdrop');
@@ -461,6 +467,21 @@ permissionBlock.addEventListener('click', () => {
     window.woowil.respondPermission(currentPermissionId, false);
   }
 });
+
+// -- Password manager: save-password banner -----------------------------
+
+window.woowil.onPasswordPrompt((data) => {
+  if (!data) {
+    passwordBar.hidden = true;
+    return;
+  }
+  const verb = data.isUpdate ? 'opdatere den gemte adgangskode til' : 'gemme adgangskoden til';
+  passwordText.textContent = `Vil du ${verb} ${data.origin}${data.username ? ` (${data.username})` : ''}?`;
+  passwordBar.hidden = false;
+});
+passwordSave.addEventListener('click', () => window.woowil.respondPasswordPrompt('save'));
+passwordNever.addEventListener('click', () => window.woowil.respondPasswordPrompt('never'));
+passwordDismiss.addEventListener('click', () => window.woowil.respondPasswordPrompt('dismiss'));
 
 // -- Auto-update --------------------------------------------------------
 
