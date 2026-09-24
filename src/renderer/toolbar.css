@@ -703,3 +703,45 @@ body {
   cursor: pointer;
   font-size: 13px;
 }
+
+#woowil-account-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+#woowil-account-status {
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+#woowil-account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#woowil-account-form input {
+  padding: 7px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+}
+#woowil-account-form button[type='submit'] {
+  padding: 7px;
+  border-radius: 4px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+#woowil-account-logout {
+  padding: 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  width: 100%;
+}

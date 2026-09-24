@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('woowil', {
   unlockProfile: (id, password) => ipcRenderer.send('woowil:unlock-profile', id, password),
   deleteProfile: (id) => ipcRenderer.send('woowil:delete-profile', id),
   createProfile: (name, password) => ipcRenderer.send('woowil:create-profile', name, password),
+  accountLogin: (identifier, password) => ipcRenderer.invoke('woowil:account-login', identifier, password),
+  accountLogout: () => ipcRenderer.invoke('woowil:account-logout'),
   setPanelOpen: (open) => ipcRenderer.send('woowil:set-panel-open', open),
   getBookmarksBar: () => ipcRenderer.send('woowil:get-bookmarks-bar'),
   getSuggestions: (query) => ipcRenderer.invoke('woowil:get-suggestions', query),

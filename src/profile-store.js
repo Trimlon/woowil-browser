@@ -94,6 +94,36 @@ class ProfileStore {
     return candidate.length === stored.length && crypto.timingSafeEqual(candidate, stored);
   }
 
+  // Woowil-account linkage is per-profile, not global to the whole browser
+  // install - matches how everything else here (bookmarks, passwords,
+  // history) is already profile-scoped, and lets different local profiles
+  // independently link zero-or-one Woowil accounts. `encryptedToken` is
+  // already safeStorage-encrypted by the caller (main.js) before it ever
+  // reaches this file - same pattern as this profile's own passwordHash
+  // never being a plaintext credential.
+  getWoowilAccount(id) {
+    const profile = this.findProfile(id);
+    return (profile && profile.woowilAccount) || null;
+  }
+
+  setWoowilAccount(id, account) {
+    const profile = this.findProfile(id);
+    if (!profile) {
+      return;
+    }
+    profile.woowilAccount = account;
+    writeJSON(this.indexFile, this.index);
+  }
+
+  clearWoowilAccount(id) {
+    const profile = this.findProfile(id);
+    if (!profile) {
+      return;
+    }
+    delete profile.woowilAccount;
+    writeJSON(this.indexFile, this.index);
+  }
+
   // Refuses to remove the last remaining profile; callers are responsible
   // for not removing the currently active one.
   removeProfile(id) {

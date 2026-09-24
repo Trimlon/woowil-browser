@@ -55,6 +55,13 @@ const newWindowButton = document.getElementById('new-window-btn');
 const newIncognitoButton = document.getElementById('new-incognito-btn');
 const checkUpdatesButton = document.getElementById('check-updates-btn');
 
+const woowilAccountStatus = document.getElementById('woowil-account-status');
+const woowilAccountForm = document.getElementById('woowil-account-form');
+const woowilAccountIdentifier = document.getElementById('woowil-account-identifier');
+const woowilAccountPassword = document.getElementById('woowil-account-password');
+const woowilAccountError = document.getElementById('woowil-account-error');
+const woowilAccountLogoutButton = document.getElementById('woowil-account-logout');
+
 const workspaceSwitcher = document.getElementById('workspace-switcher');
 const workspaceName = document.getElementById('workspace-name');
 const workspaceMenu = document.getElementById('workspace-menu');
@@ -632,6 +639,43 @@ function renderProfiles() {
   }
 }
 
+// -- Woowil account (optional, per-profile) --------------------------------
+//
+// Each local profile can independently link zero-or-one Woowil accounts -
+// this reflects whichever profile is currently active, same as the rest of
+// #profile-section.
+function renderWoowilAccount() {
+  const { profiles, activeProfileId } = latestProfiles;
+  const active = profiles.find((profile) => profile.id === activeProfileId);
+  const account = active && active.woowilAccount;
+
+  woowilAccountForm.hidden = Boolean(account);
+  woowilAccountLogoutButton.hidden = !account;
+  if (account) {
+    woowilAccountStatus.hidden = false;
+    woowilAccountStatus.textContent = `Logget ind som ${account.username} (${account.email})`;
+  } else {
+    woowilAccountStatus.hidden = true;
+  }
+}
+
+woowilAccountForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  woowilAccountError.hidden = true;
+  try {
+    await window.woowil.accountLogin(woowilAccountIdentifier.value.trim(), woowilAccountPassword.value);
+    woowilAccountPassword.value = '';
+    // A fresh 'profiles' push (triggered by main.js after a successful
+    // login) re-renders this section - no need to call renderWoowilAccount()
+    // here directly.
+  } catch (err) {
+    woowilAccountError.textContent = err.message;
+    woowilAccountError.hidden = false;
+  }
+});
+
+woowilAccountLogoutButton.addEventListener('click', () => window.woowil.accountLogout());
+
 function buildPasswordPrompt(profile) {
   const wrap = document.createElement('div');
   wrap.className = 'password-prompt';
@@ -689,6 +733,7 @@ window.woowil.onProfiles((data) => {
   lockedProfileId = null;
   passwordErrorId = null;
   renderProfiles();
+  renderWoowilAccount();
 });
 window.woowil.getProfiles();
 

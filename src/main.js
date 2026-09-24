@@ -73,6 +73,14 @@ const PERMISSION_BAR_HEIGHT = 40;
 const UPDATE_BAR_HEIGHT = 40;
 const PASSWORD_BAR_HEIGHT = 40;
 
+// Overridable for local/dev testing against a non-production backend - same
+// pattern as woowil-account's own app/main.js.
+const WOOWIL_ACCOUNT_BASE_URL = process.env.WOOWIL_ACCOUNT_BASE_URL || 'https://account.woowil.dk';
+// OS-level shared directory (not inside this app's own userData) - the
+// standalone Woowil Konto manager app writes here too. See woowil-account's
+// CLAUDE.md for the full cross-app login handoff design.
+const WOOWIL_ACCOUNT_PENDING_DIR = path.join(os.homedir(), '.config', 'woowil-account', 'pending');
+
 // Trim subsystems a minimal single-window browser has no use for.
 app.commandLine.appendSwitch('disable-background-networking');
 app.commandLine.appendSwitch('disable-sync');
@@ -742,6 +750,10 @@ function createWindow(store, opts = {}) {
     panelOpen = open;
     if (open) {
       win.contentView.addChildView(toolbar);
+      // Cheap enough to check every time the panel opens - catches the
+      // common case of "I just used the Woowil Konto manager app, now
+      // let me open my browser" without needing a live file-watcher.
+      checkWoowilAccountPendingFile();
     }
     layout();
   }
@@ -914,6 +926,10 @@ function createWindow(store, opts = {}) {
         id: profile.id,
         name: profile.name,
         hasPassword: store.hasPassword(profile.id),
+        woowilAccount: (() => {
+          const account = store.getWoowilAccount(profile.id);
+          return account ? { email: account.email, username: account.username } : null;
+        })(),
       })),
       activeProfileId: currentProfileId,
     });
@@ -1822,6 +1838,80 @@ function createWindow(store, opts = {}) {
     sendProfiles();
   }
 
+  // --- Woowil account (optional, per-profile) ---
+  //
+  // Two entry points converge here: this app's own login form, and the
+  // standalone "Woowil Konto" manager app dropping a token via the shared
+  // pending-file handoff (see woowil-account's CLAUDE.md). Both end up
+  // calling this same local "adopt a session" logic - the only difference
+  // is where the token came from.
+  function adoptWoowilAccountSession(profileId, token, user) {
+    store.setWoowilAccount(profileId, {
+      userId: user.id,
+      email: user.email,
+      username: user.username,
+      encryptedToken: encryptPassword(token),
+    });
+    sendProfiles();
+  }
+
+  async function loginWoowilAccount(identifier, password) {
+    const res = await fetch(`${WOOWIL_ACCOUNT_BASE_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, password, app: 'browser' }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.detail || `Fejl (${res.status})`);
+    }
+    adoptWoowilAccountSession(currentProfileId, body.token, body.user);
+    return { email: body.user.email, username: body.user.username };
+  }
+
+  async function logoutWoowilAccount() {
+    const account = store.getWoowilAccount(currentProfileId);
+    if (account) {
+      try {
+        await fetch(`${WOOWIL_ACCOUNT_BASE_URL}/auth/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${decryptPassword(account.encryptedToken)}` },
+        });
+      } catch {
+        // Best-effort - always clear locally even if the remote call failed.
+      }
+    }
+    store.clearWoowilAccount(currentProfileId);
+    sendProfiles();
+  }
+
+  // Checked at window creation and whenever the panel opens - a full live
+  // file-watcher is unnecessary complexity for something that only changes
+  // when the user is actively in the manager app anyway (see plan).
+  function checkWoowilAccountPendingFile() {
+    const filePath = path.join(WOOWIL_ACCOUNT_PENDING_DIR, 'browser.json');
+    let payload;
+    try {
+      payload = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      return;
+    }
+    try {
+      if (payload.action === 'login') {
+        adoptWoowilAccountSession(currentProfileId, payload.token, {
+          id: payload.user_id,
+          email: payload.email,
+          username: payload.username,
+        });
+      } else if (payload.action === 'logout') {
+        store.clearWoowilAccount(currentProfileId);
+        sendProfiles();
+      }
+    } finally {
+      fs.rmSync(filePath, { force: true });
+    }
+  }
+
   function toggleBookmarkAction() {
     const tab = activeTab();
     if (!tab) {
@@ -2024,6 +2114,8 @@ function createWindow(store, opts = {}) {
       }
       activateProfile(id);
     },
+    loginWoowilAccount,
+    logoutWoowilAccount,
     setPanelOpen,
     getBookmarksBar: sendBookmarksBar,
     getSuggestions,
@@ -2091,6 +2183,7 @@ function createWindow(store, opts = {}) {
   // sending the first snapshot, otherwise it's sent into the void and the
   // UI starts out empty.
   toolbar.webContents.once('did-finish-load', () => {
+    checkWoowilAccountPendingFile();
     sendProfiles();
     sendTheme();
     sendBookmarksBar();
@@ -2135,6 +2228,8 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil:unlock-profile', (event, id, password) => ctxFor(event)?.unlockProfile(id, password));
   ipcMain.on('woowil:delete-profile', (event, id) => ctxFor(event)?.deleteProfile(id));
   ipcMain.on('woowil:create-profile', (event, name, password) => ctxFor(event)?.createProfile(name, password));
+  ipcMain.handle('woowil:account-login', (event, identifier, password) => ctxFor(event)?.loginWoowilAccount(identifier, password));
+  ipcMain.handle('woowil:account-logout', (event) => ctxFor(event)?.logoutWoowilAccount());
   ipcMain.on('woowil:set-panel-open', (event, open) => ctxFor(event)?.setPanelOpen(open));
   ipcMain.on('woowil:get-bookmarks-bar', (event) => ctxFor(event)?.getBookmarksBar());
   ipcMain.handle('woowil:get-suggestions', (event, query) => ctxFor(event)?.getSuggestions(query) ?? []);

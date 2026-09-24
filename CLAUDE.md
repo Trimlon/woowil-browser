@@ -511,6 +511,45 @@ KDE/KWallet-session) før dette regnes for færdigt testet - samme
 "kan ikke verificeres i sandbox, spørg brugeren"-mønster som de native
 fil-dialoger og AltGr-tastatur-kvirken andetsteds i denne fil.
 
+## Woowil-konto (valgfrit, per-profil login til den centrale konto-tjeneste)
+
+Ny, separat tjeneste (`Trimlon/woowil-account`, se dens egen CLAUDE.md for
+den fulde arkitektur) giver et centralt "Woowil-konto"-login på tværs af
+browser/mail/en standalone "Woowil Konto"-app - helt valgfrit, aldrig et
+krav for at bruge browseren.
+
+- **Per-profil, ikke globalt** - `src/profile-store.js`'s
+  `getWoowilAccount(id)`/`setWoowilAccount(id, account)`/
+  `clearWoowilAccount(id)` gemmer `{userId, email, username,
+  encryptedToken}` direkte i den enkelte profils post i `profiles.json`
+  (samme fil som `passwordHash`) - matcher at alt andet her allerede er
+  profil-scopet, og lader forskellige lokale profiler uafhængigt linke
+  nul-eller-én Woowil-konto.
+- **Genbruger den eksisterende `encryptPassword`/`decryptPassword`**
+  (allerede generiske `safeStorage`-wrappere fra password manager-
+  funktionen, ikke adgangskode-specifikke) til at kryptere session-tokenet
+  før det rammer disken - ingen ny lokal krypteringsvej bygget.
+- **To login-veje, samme lokale "adopter en session"-logik**:
+  `loginWoowilAccount(identifier, password)` (kaldt fra panelets egen
+  formular via `woowil:account-login`-IPC) og `checkWoowilAccountPendingFile()`
+  (kaldt ved vinduesopstart og hver gang panelet åbnes) ender begge i
+  `adoptWoowilAccountSession(profileId, token, user)`. Den sidste tjekker
+  `~/.config/woowil-account/pending/browser.json` - en delt, OS-niveau-
+  mappe (IKKE inde i denne apps egen `userData`), som den separate
+  "Woowil Konto"-manager-app dropper en token i, så den kan logge browseren
+  ind uden at spørge om adgangskoden igen. Se woowil-account-repoets
+  CLAUDE.md for hele handoff-designet.
+- **Log ud er ikke-destruktivt** - `logoutWoowilAccount()` rydder kun
+  selve konto-linket (`store.clearWoowilAccount`), rører aldrig bogmærker/
+  adgangskoder/historik.
+- **Arver den kendte, udokumenterede `safeStorage`-hæng-risiko** fra
+  password manager-funktionen ovenfor - ingen ny afhjælpning forsøgt her.
+- **Verificeret live** (mod en lokal dev-instans af woowil-account-
+  backend'en): panel-login virker og gemmer et genuint krypteret (ikke
+  klartekst) token i `profiles.json`, log ud rydder det korrekt, og
+  pending-fil-handoff'et (simuleret som om manager-appen havde skrevet den)
+  bliver korrekt samlet op ved panel-åbning og filen slettet bagefter.
+
 ## Sikkerhedsfund fra en review (rettet)
 
 Tre reelle, ikke-teoretiske huller fundet ved en sikkerhedsgennemgang af

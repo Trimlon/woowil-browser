@@ -98,6 +98,23 @@
           <button type="submit">Opret bruger</button>
         </form>
       </div>
+
+      <div id="woowil-account-section">
+        <h2>Woowil-konto</h2>
+        <p id="woowil-account-status" hidden></p>
+        <form id="woowil-account-form">
+          <input id="woowil-account-identifier" placeholder="E-mail eller brugernavn" autocomplete="username" />
+          <input
+            id="woowil-account-password"
+            type="password"
+            placeholder="Adgangskode"
+            autocomplete="current-password"
+          />
+          <p class="panel-error" id="woowil-account-error" hidden></p>
+          <button type="submit">Log ind</button>
+        </form>
+        <button id="woowil-account-logout" type="button" hidden>Log ud</button>
+      </div>
     </aside>
 
     <script src="toolbar.js"></script>
