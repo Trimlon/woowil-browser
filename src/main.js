@@ -1855,6 +1855,25 @@ function createWindow(store, opts = {}) {
     sendProfiles();
   }
 
+  // A Woowil account gets its OWN local profile, not whatever happened to
+  // be active when you logged in - confirmed explicitly with the project
+  // owner rather than assumed: logging in as yourself shouldn't silently
+  // relabel "Standard" (or any other existing profile) as you, and
+  // definitely shouldn't delete/replace any other profile. Re-logging in
+  // with the same Woowil account later reuses the SAME profile (matched
+  // by userId, not by name - a user could rename their profile) instead of
+  // piling up duplicates every time.
+  function resolveWoowilProfile(user) {
+    const existing = store.listProfiles().find((profile) => {
+      const account = store.getWoowilAccount(profile.id);
+      return account && account.userId === user.id;
+    });
+    if (existing) {
+      return existing.id;
+    }
+    return store.createProfile(user.username || user.email);
+  }
+
   async function loginWoowilAccount(identifier, password) {
     const res = await fetch(`${WOOWIL_ACCOUNT_BASE_URL}/auth/login`, {
       method: 'POST',
@@ -1865,7 +1884,15 @@ function createWindow(store, opts = {}) {
     if (!res.ok) {
       throw new Error(body.detail || `Fejl (${res.status})`);
     }
-    adoptWoowilAccountSession(currentProfileId, body.token, body.user);
+    const profileId = resolveWoowilProfile(body.user);
+    adoptWoowilAccountSession(profileId, body.token, body.user);
+    // Becomes the new default profile going forward (persisted via
+    // activateProfile -> store.setActiveProfileId) - matches what was
+    // asked for: the Woowil-account profile is the one the browser opens
+    // into next time, without removing any other profile.
+    if (profileId !== currentProfileId) {
+      activateProfile(profileId);
+    }
     return { email: body.user.email, username: body.user.username };
   }
 
@@ -1898,11 +1925,12 @@ function createWindow(store, opts = {}) {
     }
     try {
       if (payload.action === 'login') {
-        adoptWoowilAccountSession(currentProfileId, payload.token, {
-          id: payload.user_id,
-          email: payload.email,
-          username: payload.username,
-        });
+        const user = { id: payload.user_id, email: payload.email, username: payload.username };
+        const profileId = resolveWoowilProfile(user);
+        adoptWoowilAccountSession(profileId, payload.token, user);
+        if (profileId !== currentProfileId) {
+          activateProfile(profileId);
+        }
       } else if (payload.action === 'logout') {
         store.clearWoowilAccount(currentProfileId);
         sendProfiles();

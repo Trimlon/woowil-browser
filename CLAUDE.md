@@ -539,6 +539,25 @@ krav for at bruge browseren.
   "Woowil Konto"-manager-app dropper en token i, så den kan logge browseren
   ind uden at spørge om adgangskoden igen. Se woowil-account-repoets
   CLAUDE.md for hele handoff-designet.
+- **En Woowil-konto får sin EGEN lokale profil, ikke den der tilfældigvis
+  var aktiv ved login** - oprindeligt tagede login bare `currentProfileId`
+  direkte, hvilket i praksis betød at logge ind som dig selv omdøbte/
+  overtog "Standard"-profilen. Rettet efter direkte tilbagemelding: begge
+  login-veje kalder nu først `resolveWoowilProfile(user)`, som leder efter
+  en eksisterende profil hvis `woowilAccount.userId` matcher (så gen-login
+  genbruger samme profil i stedet for at hobe nye op) - findes ingen,
+  oprettes en helt ny profil (navngivet efter `user.username`), som
+  derefter aktiveres via `activateProfile()` (samme fulde profilskifte-rutine
+  som panelets egen profilvælger bruger - persisterer også som den nye
+  standard-profil ved næste opstart, via `store.setActiveProfileId`).
+  **Sletter eller rører aldrig andre profiler** - hverken "Standard" eller
+  nogen anden, kun tilføjer. Verificeret direkte mod den rigtige
+  `ProfileStore`-klasse (ingen `safeStorage` involveret i selve
+  profil-opslags-/oprettelseslogikken, så det var fuldt testbart her): ny
+  profil oprettes og bliver aktiv ved første login, "Standard" er urørt og
+  har ingen Woowil-konto-link, gen-login med samme bruger genbruger samme
+  profil (ingen dubletter), og en anden Woowil-bruger får sin egen tredje
+  profil.
 - **Log ud er ikke-destruktivt** - `logoutWoowilAccount()` rydder kun
   selve konto-linket (`store.clearWoowilAccount`), rører aldrig bogmærker/
   adgangskoder/historik.
