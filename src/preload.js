@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('woowil', {
   newTab: () => ipcRenderer.send('woowil:new-tab'),
   switchTab: (id) => ipcRenderer.send('woowil:switch-tab', id),
   closeTab: (id) => ipcRenderer.send('woowil:close-tab', id),
+  reorderTab: (id, targetIndex) => ipcRenderer.send('woowil:reorder-tab', id, targetIndex),
+  detachTab: (id) => ipcRenderer.send('woowil:detach-tab', id),
   reopenClosedTab: () => ipcRenderer.send('woowil:reopen-closed-tab'),
   duplicateTab: (id) => ipcRenderer.send('woowil:duplicate-tab', id),
   closeOtherTabs: (id) => ipcRenderer.send('woowil:close-other-tabs', id),

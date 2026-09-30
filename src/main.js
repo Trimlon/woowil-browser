@@ -1529,6 +1529,26 @@ function createWindow(store, opts = {}) {
       buildContextMenu(view, params).popup({ window: win });
     });
 
+    // Without this, `window.open()`/`target="_blank"` falls through to
+    // Electron's own default handling, which creates a bare, chrome-less
+    // BrowserWindow showing only that page - found live: exactly the "new
+    // window isn't a complete browser window" report. `disposition ===
+    // 'new-window'` is Chromium's signal that the site asked for a
+    // separate top-level window (e.g. `window.open(url, '_blank',
+    // 'popup,width=...')`) rather than a plain link/window.open - route
+    // that through the SAME createWindow() used for Ctrl+N, so it gets a
+    // full Woowil window (toolbar + tabs), not Electron's stripped popup.
+    // Anything else (plain target="_blank", a bare window.open) opens as a
+    // new tab in this same window, matching ordinary browser behavior.
+    view.webContents.setWindowOpenHandler((details) => {
+      if (details.disposition === 'new-window') {
+        createWindow(store, { startupUrl: details.url });
+      } else {
+        createTab(details.url, tab.workspaceId);
+      }
+      return { action: 'deny' };
+    });
+
     view.webContents.loadURL(url || homepage());
     switchToTab(tab.id);
     return tab.id;
@@ -1632,6 +1652,69 @@ function createWindow(store, opts = {}) {
         switchWorkspace(otherWorkspace.id);
       }
     }
+  }
+
+  // Reorders within the CURRENT workspace only - `tabs[]` interleaves every
+  // workspace's tabs, but the tab strip (and thus `targetIndex`, coming
+  // from the renderer's drag-and-drop) only ever knows about the active
+  // workspace's own visible tabs. Translate that position back into the
+  // full array by only touching the subsequence belonging to this
+  // workspace, so other workspaces' relative tab order is never disturbed.
+  function reorderTab(id, targetIndex) {
+    const workspaceIndices = tabs
+      .map((t, i) => (t.workspaceId === activeWorkspaceId ? i : -1))
+      .filter((i) => i !== -1);
+    const fromPos = workspaceIndices.findIndex((i) => tabs[i].id === id);
+    // targetIndex is "insert before the tab currently at this position in
+    // the same-workspace list" (pre-removal, so workspaceIndices.length
+    // itself is a valid value meaning "insert at the very end").
+    if (fromPos === -1 || targetIndex < 0 || targetIndex > workspaceIndices.length || targetIndex === fromPos) {
+      return;
+    }
+    // Removing the dragged tab first shifts every later same-workspace
+    // position down by one - a target past the tab's own current position
+    // needs the same shift before it means anything against the
+    // post-removal list computed below.
+    const adjustedTarget = targetIndex > fromPos ? targetIndex - 1 : targetIndex;
+    const [tab] = tabs.splice(workspaceIndices[fromPos], 1);
+    const remaining = tabs
+      .map((t, i) => (t.workspaceId === activeWorkspaceId ? i : -1))
+      .filter((i) => i !== -1);
+    // tabs[] interleaves every workspace's tabs, so "the end of this
+    // workspace's own tabs" is usually NOT the end of the whole array -
+    // falling back to tabs.length there would wrongly jump the tab past
+    // another workspace's tabs that happen to sit later in the raw array.
+    const insertAt =
+      remaining.length === 0
+        ? tabs.length
+        : adjustedTarget < remaining.length
+          ? remaining[adjustedTarget]
+          : remaining[remaining.length - 1] + 1;
+    tabs.splice(insertAt, 0, tab);
+    sendTabs();
+  }
+
+  // Dragging a tab out of the strip entirely - opens it in a brand-new
+  // window instead. This re-navigates to the same URL in a fresh tab
+  // rather than moving the live WebContentsView across windows: every
+  // per-tab event listener (did-navigate, context-menu, setWindowOpenHandler,
+  // ...) set up in createTab() closes over THIS window's own toolbar/tabs/
+  // activeTabId, so simply reparenting the view would leave it silently
+  // wired to the wrong window. Reusing closeTab()+createWindow() (both
+  // already proven, unlike a from-scratch view-transplant) is the safe
+  // trade-off - costs the page's in-memory JS state and forward/back
+  // history, which a real re-navigation always does anyway.
+  function detachTabToWindow(id) {
+    if (tabs.length <= 1) {
+      // Nothing to pull out into a second window - dragging the sole tab
+      // of a window "out" would just mean moving the window itself.
+      return;
+    }
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+    const url = tab.view.webContents.getURL();
+    closeTab(id);
+    createWindow(store, { startupUrl: url });
   }
 
   function reopenClosedTab() {
@@ -2117,6 +2200,8 @@ function createWindow(store, opts = {}) {
     newTab: () => createTab(),
     switchTab: switchToTab,
     closeTab,
+    reorderTab,
+    detachTabToWindow,
     reopenClosedTab,
     duplicateTab: duplicateTabAction,
     closeOtherTabs: closeOtherTabsAction,
@@ -2241,6 +2326,8 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil:new-tab', (event) => ctxFor(event)?.newTab());
   ipcMain.on('woowil:switch-tab', (event, id) => ctxFor(event)?.switchTab(id));
   ipcMain.on('woowil:close-tab', (event, id) => ctxFor(event)?.closeTab(id));
+  ipcMain.on('woowil:reorder-tab', (event, id, targetIndex) => ctxFor(event)?.reorderTab(id, targetIndex));
+  ipcMain.on('woowil:detach-tab', (event, id) => ctxFor(event)?.detachTabToWindow(id));
   ipcMain.on('woowil:reopen-closed-tab', (event) => ctxFor(event)?.reopenClosedTab());
   ipcMain.on('woowil:duplicate-tab', (event, id) => ctxFor(event)?.duplicateTab(id));
   ipcMain.on('woowil:close-other-tabs', (event, id) => ctxFor(event)?.closeOtherTabs(id));

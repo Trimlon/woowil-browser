@@ -158,12 +158,18 @@ window.woowil.onBookmarkState((isBookmarked) => {
   bookmarkButton.classList.toggle('active', isBookmarked);
 });
 
+// Drag-to-reorder + drag-out-to-new-window. `draggedTabId` is only set for
+// the lifetime of one drag gesture - `dragend` always fires exactly once
+// per `dragstart`, so it's a safe place to clear it.
+let draggedTabId = null;
+
 window.woowil.onTabs((tabs) => {
   tabstrip.querySelectorAll('.tab').forEach((el) => el.remove());
   for (const tab of tabs) {
     const el = document.createElement('div');
     el.className = 'tab' + (tab.isActive ? ' active' : '');
     el.title = tab.title;
+    el.draggable = true;
 
     const title = document.createElement('span');
     title.className = 'tab-title';
@@ -184,8 +190,50 @@ window.woowil.onTabs((tabs) => {
       event.preventDefault();
       showTabContextMenu(event.clientX, event.clientY, tab.id);
     });
+
+    el.addEventListener('dragstart', (event) => {
+      draggedTabId = tab.id;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(tab.id));
+      el.classList.add('dragging');
+    });
+    el.addEventListener('dragend', () => {
+      el.classList.remove('dragging');
+      // The tabstrip's own dragover handler below is the only place that
+      // ever sets dropEffect to 'move' - if it never fired (the tab was
+      // dragged out of the strip's own bounds entirely, e.g. down into the
+      // page or out of the window), dropEffect stays at its default
+      // 'none'. Same gesture real browsers use to tear a tab into its own
+      // window.
+      if (draggedTabId !== null && event.dataTransfer.dropEffect !== 'move') {
+        window.woowil.detachTab(draggedTabId);
+      }
+      draggedTabId = null;
+    });
+
     tabstrip.insertBefore(el, newTabButton);
   }
+});
+
+tabstrip.addEventListener('dragover', (event) => {
+  if (draggedTabId === null) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+});
+
+tabstrip.addEventListener('drop', (event) => {
+  if (draggedTabId === null) return;
+  event.preventDefault();
+  const tabEls = [...tabstrip.querySelectorAll('.tab')];
+  let targetIndex = tabEls.length;
+  for (let i = 0; i < tabEls.length; i++) {
+    const rect = tabEls[i].getBoundingClientRect();
+    if (event.clientX < rect.left + rect.width / 2) {
+      targetIndex = i;
+      break;
+    }
+  }
+  window.woowil.reorderTab(draggedTabId, targetIndex);
 });
 
 // -- Tab right-click menu ----------------------------------------------------

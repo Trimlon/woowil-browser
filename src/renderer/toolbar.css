@@ -84,6 +84,10 @@ body {
   font-weight: 600;
 }
 
+.tab.dragging {
+  opacity: 0.4;
+}
+
 .tab-title {
   flex: 1;
   overflow: hidden;

@@ -569,6 +569,75 @@ krav for at bruge browseren.
   pending-fil-handoff'et (simuleret som om manager-appen havde skrevet den)
   bliver korrekt samlet op ved panel-åbning og filen slettet bagefter.
 
+## Fanehåndtering: ny-vindue-links, træk-for-at-omarrangere, træk-ud-til-nyt-vindue (v0.4.2)
+
+Tre ting rapporteret fra en rigtig, frisk installation:
+
+- **`window.open()`/`target="_blank"` åbnede et bart, "ufuldstændigt"
+  vindue** - der var slet ingen `setWindowOpenHandler` sat noget sted, så
+  Electrons helt generiske standardopførsel tog over: en almindelig
+  `BrowserWindow` med kun siden i, ingen af denne apps egen toolbar/faner.
+  Rettet i `createTab()` (`src/main.js`): `view.webContents.
+  setWindowOpenHandler((details) => {...})` afviser altid selve default-
+  handlingen (`{action:'deny'}`) og styrer det manuelt i stedet -
+  `disposition === 'new-window'` (siden bad eksplicit om et separat
+  top-niveau-vindue, typisk `window.open(url,'_blank','popup,width=...')`)
+  går gennem det SAMME `createWindow()` som Ctrl+N allerede bruger (så det
+  får en fuld Woowil-toolbar+faner, ikke Electrons afklædte popup); alt
+  andet (almindeligt `target="_blank"`, et bart `window.open()`) åbner som
+  en ny fane i samme vindue via `createTab()`, som en almindelig browser.
+  **Kendt, accepteret afvejning**: at afvise+genskabe manuelt betyder
+  `window.open()` altid returnerer `null` til siden, så scripts der prøver
+  at skrive/postMessage'e til det returnerede vindue-håndtag (fx en tom
+  `window.open('','_blank')` fyldt via `.document.write()` bagefter) ikke
+  virker - en generel, uundgåelig konsekvens af at overstyre
+  `setWindowOpenHandler` på denne måde i enhver Electron-baseret browser,
+  ikke noget der kan rettes herfra.
+
+- **Faner kunne ikke trækkes for at omarrangeres** - `tabstrip.js` fik
+  fuld HTML5 drag-and-drop: hver `.tab` er nu `draggable=true`, med
+  `dragstart`/`dragend` på selve fanen og `dragover`/`drop` på selve
+  `#tabstrip`-beholderen (indsætningsindeks beregnet fra musens X-position
+  relativt til hver fanes midtpunkt). Ny IPC `woowil:reorder-tab` →
+  `reorderTab(id, targetIndex)` i `main.js` omarrangerer selve `tabs[]`.
+  **Ikke helt trivielt**: `tabs[]` er ÉT array der fletter ALLE
+  arbejdsområders faner sammen (fanestrimlen viser kun det aktive
+  arbejdsområdes egne, via `sendTabs()`s eget filter) - `reorderTab` regner
+  derfor kun positionen om inden for samme arbejdsområdes egen delsekvens,
+  og rører aldrig andre arbejdsområders indbyrdes rækkefølge. Verificeret
+  med et selvstændigt Node-script mod selve algoritmen (ikke kun læst
+  igennem): flytning til venstre/højre/start/slut, no-op ved "slip på
+  samme plads", og et blandet to-arbejdsområde-array, alle gav korrekt
+  resultat.
+
+- **Træk en fane helt ud → nyt vindue** - samme drag-gestus som rigtige
+  browsere ("træk fanen langt nok væk fra stripet"): `dragend` tjekker om
+  `event.dataTransfer.dropEffect !== 'move'` - `'move'` sættes KUN af
+  stripets egen `dragover`-handler, så hvis den aldrig fyrede (fanen blev
+  trukket uden for selve `#tabstrip`s grænser, fx ned i sideindholdet eller
+  helt ud af vinduet), betyder det "droppet udenfor" og udløser ny IPC
+  `woowil:detach-tab` → `detachTabToWindow(id)`. **Bevidst forenklet
+  implementering**: genbruger `closeTab()`+`createWindow(store,
+  {startupUrl: url})` (begge allerede afprøvede kodeveje) frem for at
+  flytte selve den LEVENDE `WebContentsView` til det nye vindue - hver
+  `view.webContents.on(...)`-lytter sat op i `createTab()` (did-navigate,
+  context-menu, `setWindowOpenHandler` osv.) lukker over DETTE vindues
+  egen `toolbar`/`tabs`/`activeTabId`, så en ren view-transplantation ville
+  efterlade den tavst forbundet til det forkerte (gamle) vindue uden en
+  betydelig omstrukturering af hvordan disse lyttere registreres. Prisen:
+  siden genindlæses i det nye vindue (samme URL), så frem/tilbage-historik
+  og upsat JS-tilstand på siden går tabt - en reel, bevidst afvejning, ikke
+  en tilfældig begrænsning.
+
+**Ikke testet live i denne session** - denne sandkasse har ingen fungerende
+`xdotool`/skærmbillede-pipeline lige nu (se andre steder i denne fil), og
+ægte museklik-baseret drag-and-drop kan ikke simuleres pålideligt via CDP's
+`Input.dispatchMouseEvent` alene for HTML5 drag-events (de kræver browserens
+egen interne drag-source-tracking, ikke bare musebevægelser). Kun
+statisk kodelæsning + den isolerede algoritme-test af `reorderTab` ovenfor.
+**Bed brugeren bekræfte alle tre punkter på egen maskine** før dette regnes
+for færdigt verificeret.
+
 ## Sikkerhedsfund fra en review (rettet)
 
 Tre reelle, ikke-teoretiske huller fundet ved en sikkerhedsgennemgang af
