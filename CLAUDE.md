@@ -586,13 +586,36 @@ Tre ting rapporteret fra en rigtig, frisk installation:
   får en fuld Woowil-toolbar+faner, ikke Electrons afklædte popup); alt
   andet (almindeligt `target="_blank"`, et bart `window.open()`) åbner som
   en ny fane i samme vindue via `createTab()`, som en almindelig browser.
-  **Kendt, accepteret afvejning**: at afvise+genskabe manuelt betyder
-  `window.open()` altid returnerer `null` til siden, så scripts der prøver
-  at skrive/postMessage'e til det returnerede vindue-håndtag (fx en tom
-  `window.open('','_blank')` fyldt via `.document.write()` bagefter) ikke
-  virker - en generel, uundgåelig konsekvens af at overstyre
-  `setWindowOpenHandler` på denne måde i enhver Electron-baseret browser,
-  ikke noget der kan rettes herfra.
+  **RETTELSE (v0.4.3) til "uundgåelig konsekvens" ovenfor - det var den
+  ikke**: at afvise+genskabe ALTID betød `window.open()` returnerede `null`
+  virkede fint for almindelige links, men ødelagde enhver popup-baseret
+  login-strøm (Google/Microsoft/GitHub-login m.fl.), som er fuldstændig
+  afhængig af at siden selv har et rigtigt håndtag til popup'en
+  (`window.opener`/`postMessage` tilbage til den, eller selve
+  `window.open()`-returværdien) for nogensinde at opdage at login lykkedes
+  og lukke popup'en igen. Fundet live: login på claude.ai med en
+  Google-konto åbnede popup'en, login lykkedes der, men claude.ai's egen
+  fane fandt aldrig ud af det og kom aldrig videre.
+  **Fix**: `setWindowOpenHandler` tjekker nu også `details.features` - en
+  SCRIPTET popup (ikke-tom `features`-streng, præcis sådan stort set alle
+  login-popup'er åbnes, fx `window.open(url,'oauth','popup,width=500,
+  height=600')`) får nu `{action:'allow'}` i stedet, så Chromium selv
+  opretter det rigtige barn-vindue med `window.opener` korrekt forbundet -
+  siden får en ægte, ikke-null returværdi, og hele login-tilbage-flowet
+  virker som i en almindelig browser. En USCRIPTET ny-vindue-forespørgsel
+  (tom `features`, fx et almindeligt midt-klik "åbn i nyt vindue") har intet
+  sådant afhængighedsforhold og går stadig gennem `createWindow()`/
+  `createTab()` som før, så den beholder en fuld Woowil-toolbar+faner.
+  **Verificeret** med en minimal selvstændig Electron-testapp (samme
+  disciplin som ellers i dette repo): et scriptet `window.open(url,name,
+  'popup,width=...')`-kald fik en ikke-null returværdi (handleren valgte
+  `allow`), mens et bart `window.open(url)` uden argumenter fortsat gav
+  `null` (uændret `deny`-sti) - bekræftede samtidig at Chromium klassificerer
+  et HELT bart `window.open(url)` som `disposition: 'foreground-tab'`, ikke
+  `'new-window'`, så det allerede gik gennem `createTab()`-grenen i forvejen.
+  **Ikke testet**: en ægte, fuld Google-login-strøm med rigtige klik (samme
+  miljøbegrænsning som andre klik-/popup-tunge funktioner i dette repo) -
+  bed brugeren bekræfte det virker på deres egen maskine.
 
 - **Faner kunne ikke trækkes for at omarrangeres** - `tabstrip.js` fik
   fuld HTML5 drag-and-drop: hver `.tab` er nu `draggable=true`, med

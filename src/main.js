@@ -1535,13 +1535,35 @@ function createWindow(store, opts = {}) {
     // window isn't a complete browser window" report. `disposition ===
     // 'new-window'` is Chromium's signal that the site asked for a
     // separate top-level window (e.g. `window.open(url, '_blank',
-    // 'popup,width=...')`) rather than a plain link/window.open - route
-    // that through the SAME createWindow() used for Ctrl+N, so it gets a
-    // full Woowil window (toolbar + tabs), not Electron's stripped popup.
-    // Anything else (plain target="_blank", a bare window.open) opens as a
-    // new tab in this same window, matching ordinary browser behavior.
+    // 'popup,width=...')`) rather than a plain link/window.open.
+    //
+    // A SCRIPTED popup (non-empty `details.features` - real browsers'
+    // window.open() sets this whenever the caller passed explicit
+    // size/position, which is exactly how virtually every OAuth/sign-in
+    // flow opens its popup, e.g. Google/Microsoft/GitHub sign-in) is let
+    // through via `action: 'allow'` instead of being denied+recreated:
+    // denying always made `window.open()` return null to the calling
+    // page, severing `window.opener`/`postMessage` back to it - fine for
+    // an ordinary link, but fatal for a sign-in popup, which depends on
+    // exactly that channel to tell the opener "login succeeded, closing
+    // now." Found live: signing into claude.ai with a Google account
+    // opened the popup, login succeeded there, but claude.ai's own tab
+    // never found out and never continued - this is why; this app's own
+    // CLAUDE.md previously (wrongly) called that an unavoidable
+    // consequence of overriding setWindowOpenHandler at all, but it's
+    // only unavoidable for the deny+recreate path, not for `allow`.
+    //
+    // An UNSCRIPTED new-window request (no explicit features - a plain
+    // middle-click "open in new window", or a `target="_blank"` link
+    // styled as a window instead of a tab) has no such opener dependency
+    // and still goes through the existing createWindow()/createTab() path
+    // below, so it keeps getting a full Woowil window with toolbar+tabs
+    // instead of Electron's bare default popup.
     view.webContents.setWindowOpenHandler((details) => {
       if (details.disposition === 'new-window') {
+        if (details.features) {
+          return { action: 'allow' };
+        }
         createWindow(store, { startupUrl: details.url });
       } else {
         createTab(details.url, tab.workspaceId);
