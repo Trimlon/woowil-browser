@@ -228,6 +228,25 @@ const permissionsHandledPartitions = new Set();
 const adBlockHandledPartitions = new Set();
 const adBlockCache = new Map(); // profileId -> boolean
 
+// Electron's default UA includes "Woowil/<version> ... Electron/<version>" —
+// sites that allowlist UA strings against known browsers (seen live against
+// Hetzner's console, which banners "browser not supported") don't recognize
+// those tokens even though the underlying Chromium is fully capable. Strip
+// them so the UA matches what a stock Chromium build would send, same
+// approach other Chromium-based browsers (Brave, Vivaldi, Opera) use.
+const userAgentHandledPartitions = new Set();
+function ensureUserAgentHandled(partition) {
+  if (userAgentHandledPartitions.has(partition)) {
+    return;
+  }
+  userAgentHandledPartitions.add(partition);
+  const ses = session.fromPartition(partition);
+  const cleanUA = ses.getUserAgent()
+    .replace(/\s*Woowil\/\S+/i, '')
+    .replace(/\s*Electron\/\S+/i, '');
+  ses.setUserAgent(cleanUA);
+}
+
 function ensureAdBlockHandled(partition, profileId, store) {
   if (adBlockHandledPartitions.has(partition)) {
     return;
@@ -1466,6 +1485,7 @@ function createWindow(store, opts = {}) {
     ensurePermissionsHandled(partition);
     ensureAdBlockHandled(partition, currentProfileId, store);
     ensureExtensionsHandled(partition, currentProfileId, store);
+    ensureUserAgentHandled(partition);
     const view = new WebContentsView({
       webPreferences: {
         contextIsolation: true,

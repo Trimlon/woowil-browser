@@ -843,7 +843,58 @@ globen ingenting.
 - Ingen automatiserede tests findes endnu — al verifikation har været manuel
   (se testmetode ovenfor).
 
+## User-agent — rettet "browser not supported"-bannere på visse sider
+
+Rapporteret live af brugeren: `console.hetzner.com` viste en "Browser not
+supported"-banner i toppen ved første besøg. Root cause: Electrons egen
+standard-UA indeholder ` Electron/44.4.3` i slutningen (bekræftet direkte med
+et minimalt headless `session.defaultSession.getUserAgent()`-testscript, ikke
+gættet) — sider der allowlister UA-strenge mod kendte browsere genkender ikke
+det token og viser en advarsel, selvom den underliggende Chromium er fuldt
+funktionsduelig.
+
+**Fix**: ny `ensureUserAgentHandled(partition)` i `src/main.js` (samme
+`XHandledPartitions`-guard-mønster som `ensureProtocolHandled`/
+`ensurePermissionsHandled` osv., kaldt fra `createTab()`), som sætter
+sessionens UA til `session.getUserAgent()` med ` Woowil/<version>`- og
+` Electron/<version>`-tokens fjernet via regex — samme tilgang som Brave/
+Vivaldi/Opera selv bruger. Verificeret live: original UA var
+`...Chrome/152.0.7977.130 Electron/44.4.3 Safari/537.36`, renset bliver den
+`...Chrome/152.0.7977.130 Safari/537.36`. Bemærk: `Woowil/`-stripningen var i
+dette testmiljø et no-op (app-navnet optræder ikke i UA'en når appen køres
+upakket via `npx electron .`) — behold den alligevel som sikkerhedsnet, da en
+*pakket* build (med `productName: "Woowil"` fra `package.json`) potentielt
+kunne indsætte det token; ikke verificeret i en rigtig pakket AppImage endnu.
+
+## Netflix / DRM-sider — kendt begrænsning, bevidst ikke løst
+
+Netflix viser "make sure sites can play protected content" ved afspilning —
+klassisk Widevine-CDM-mangel. Electron bundler (ligesom almindelig Chromium)
+aldrig selve Widevine CDM'en, i modsætning til rigtig Chrome. Undersøgt
+grundigt (webresearch, ikke kun gættet):
+
+- **castLabs' Widevine-patchede Electron-fork** (`castlabs/electron-releases`,
+  "Electron for Content Security") findes og er den etablerede løsning for
+  Electron+DRM generelt — men deres nyeste Electron 44-build er
+  `v44.0.0-alpha.1+wvcus`, stadig alpha og **tre patch-versioner bagud** for
+  Woowils nuværende `44.4.3`. Deres sidste egentlige stabile serie er
+  `43.0.0+wvcus`.
+- **At skifte nu ville reintroducere et allerede rettet crash**: se
+  "chrome.webstorePrivate"-segfault-fundet ovenfor under "Chrome-udvidelser"
+  — det blev først fixet opstrøms i stock-Electron **44.4.0**. castLabs'
+  `44.0.0-alpha.1` ligger før den fix.
+- **Widevine på Linux er uanset begrænset til sikkerhedsniveau L3** (software-
+  only, ingen hardware-TEE) — samme begrænsning ægte Chrome/Firefox har på
+  Linux. Netflix capper selv med en fuldt virkende CDM til maks. 720p på
+  Linux, uanset browser (industristandard-begrænsning, ikke noget
+  Woowil-specifikt).
+- **Brugerens beslutning (2026-10-07)**: lad Netflix/DRM-sider stå som en
+  kendt, accepteret begrænsning for nu. Genoptag kun hvis castLabs udgiver en
+  stabil build der matcher/overgår `44.4.x`, og vurdér da på ny om 720p-capet
+  stadig gør det værd besværet.
+
 ## Ting brugeren bevidst har fravalgt/udskudt
 
 - Konto-sync på tværs af enheder (kun lokale profiler).
 - Kodesignering af Windows-builden (koster penge, ikke gjort endnu).
+- DRM/Widevine-support (Netflix m.fl.) — se "Netflix / DRM-sider" ovenfor.
