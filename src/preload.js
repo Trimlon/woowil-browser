@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('woowil', {
   renameWorkspace: (id, name) => ipcRenderer.send('woowil:rename-workspace', id, name),
   deleteWorkspace: (id) => ipcRenderer.send('woowil:delete-workspace', id),
   toggleBookmark: () => ipcRenderer.send('woowil:toggle-bookmark'),
+  confirmAddBookmark: (data) => ipcRenderer.send('woowil:confirm-add-bookmark', data),
+  getBookmarkTree: () => ipcRenderer.send('woowil:get-bookmark-tree'),
   getProfiles: () => ipcRenderer.send('woowil:get-profiles'),
   switchProfile: (id) => ipcRenderer.send('woowil:switch-profile', id),
   unlockProfile: (id, password) => ipcRenderer.send('woowil:unlock-profile', id, password),
@@ -58,6 +60,10 @@ contextBridge.exposeInMainWorld('woowil', {
     ipcRenderer.on('profile-password-error', (_event, id) => callback(id)),
   onBookmarksBar: (callback) =>
     ipcRenderer.on('bookmarks-bar', (_event, bookmarks) => callback(bookmarks)),
+  onBookmarkTree: (callback) =>
+    ipcRenderer.on('bookmark-tree', (_event, data) => callback(data)),
+  onBookmarkAddPrompt: (callback) =>
+    ipcRenderer.on('bookmark-add-prompt', (_event, data) => callback(data)),
   onWorkspaces: (callback) =>
     ipcRenderer.on('workspaces', (_event, data) => callback(data)),
   onFocusAddress: (callback) =>

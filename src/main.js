@@ -978,6 +978,16 @@ function createWindow(store, opts = {}) {
     toolbar.webContents.send('bookmarks-bar', store.getBookmarks(currentProfileId));
   }
 
+  // Separate from sendBookmarksBar: the panel's own "Favoritter" submenu
+  // shows folders + items as a tree, the bar stays a flat pill list — two
+  // different views over the same underlying data.
+  function sendBookmarkTree() {
+    toolbar.webContents.send('bookmark-tree', {
+      folders: store.getBookmarkFolders(currentProfileId),
+      items: store.getBookmarks(currentProfileId),
+    });
+  }
+
   function recordHistory(url, title) {
     if (incognito || url.startsWith('woowil://') || url.startsWith('data:')) {
       return;
@@ -1425,8 +1435,8 @@ function createWindow(store, opts = {}) {
   }
 
   async function exportBookmarksPage() {
-    const bookmarks = store.getBookmarks(currentProfileId);
-    if (bookmarks.length === 0) {
+    const { folders, items } = store.getBookmarksData(currentProfileId);
+    if (items.length === 0) {
       throw new Error('Ingen bogmærker at eksportere.');
     }
     const { canceled, filePath } = await dialog.showSaveDialog(win, {
@@ -1437,11 +1447,25 @@ function createWindow(store, opts = {}) {
     if (canceled || !filePath) {
       return { canceled: true };
     }
-    const items = bookmarks
-      .map((b) => {
-        const addDate = Math.round((b.addedAt || Date.now()) / 1000);
-        return `    <DT><A HREF="${escapeHtml(b.url)}" ADD_DATE="${addDate}">${escapeHtml(b.title || b.url)}</A>`;
+    const bookmarkLine = (b) => {
+      const addDate = Math.round((b.addedAt || Date.now()) / 1000);
+      return `    <DT><A HREF="${escapeHtml(b.url)}" ADD_DATE="${addDate}">${escapeHtml(b.title || b.url)}</A>`;
+    };
+    const root = items.filter((b) => !b.folderId).map(bookmarkLine).join('\n');
+    const folderBlocks = folders
+      .map((folder) => {
+        const folderItems = items.filter((b) => b.folderId === folder.id);
+        if (folderItems.length === 0) {
+          return '';
+        }
+        return (
+          `    <DT><H3>${escapeHtml(folder.name)}</H3>\n` +
+          '    <DL><p>\n' +
+          folderItems.map(bookmarkLine).join('\n') +
+          '\n    </DL><p>'
+        );
       })
+      .filter(Boolean)
       .join('\n');
     const html =
       '<!DOCTYPE NETSCAPE-Bookmark-file-1>\n' +
@@ -1449,7 +1473,7 @@ function createWindow(store, opts = {}) {
       '<TITLE>Bookmarks</TITLE>\n' +
       '<H1>Bookmarks</H1>\n' +
       '<DL><p>\n' +
-      items +
+      [root, folderBlocks].filter(Boolean).join('\n') +
       '\n</DL><p>\n';
     fs.writeFileSync(filePath, html, 'utf8');
     return { canceled: false, savedTo: filePath };
@@ -1930,6 +1954,7 @@ function createWindow(store, opts = {}) {
     sendProfiles();
     sendTheme();
     sendBookmarksBar();
+    sendBookmarkTree();
     toolbar.webContents.send('extensions-partition', currentPartition());
     loadWorkspacesAndOpenTabs(true);
   }
@@ -2065,14 +2090,39 @@ function createWindow(store, opts = {}) {
     }
   }
 
+  // Removing an existing bookmark happens immediately (same as before).
+  // Adding a new one now first asks which folder it should go in — see
+  // confirmAddBookmarkAction — so this only fires the prompt rather than
+  // writing the bookmark itself.
   function toggleBookmarkAction() {
     const tab = activeTab();
     if (!tab) {
       return;
     }
-    store.toggleBookmark(currentProfileId, tab.view.webContents.getURL(), tab.title);
+    const url = tab.view.webContents.getURL();
+    if (store.isBookmarked(currentProfileId, url)) {
+      store.removeBookmarkByUrl(currentProfileId, url);
+      sendBookmarkState();
+      sendBookmarksBar();
+      sendBookmarkTree();
+      return;
+    }
+    toolbar.webContents.send('bookmark-add-prompt', {
+      url,
+      title: tab.title,
+      folders: store.getBookmarkFolders(currentProfileId),
+    });
+  }
+
+  function confirmAddBookmarkAction({ url, title, folderId, newFolderName }) {
+    let targetFolderId = folderId || null;
+    if (newFolderName && newFolderName.trim()) {
+      targetFolderId = store.createBookmarkFolder(currentProfileId, newFolderName).id;
+    }
+    store.addBookmark(currentProfileId, url, title, targetFolderId);
     sendBookmarkState();
     sendBookmarksBar();
+    sendBookmarkTree();
   }
 
   function navigateAction(url) {
@@ -2258,6 +2308,8 @@ function createWindow(store, opts = {}) {
     renameWorkspace: renameWorkspaceAction,
     deleteWorkspace: deleteWorkspaceAction,
     toggleBookmark: toggleBookmarkAction,
+    confirmAddBookmark: confirmAddBookmarkAction,
+    getBookmarkTree: sendBookmarkTree,
     getProfiles: sendProfiles,
     switchProfile: requestSwitchProfile,
     unlockProfile,
@@ -2300,11 +2352,35 @@ function createWindow(store, opts = {}) {
     clearHistory: () => store.clearHistory(currentProfileId),
     deleteHistoryEntry: (index) => store.deleteHistoryEntry(currentProfileId, index),
     getBookmarksPage: () => store.getBookmarks(currentProfileId),
+    getBookmarkFoldersPage: () => store.getBookmarkFolders(currentProfileId),
     removeBookmarkPage: (id) => {
       const bookmarks = store.removeBookmark(currentProfileId, id);
       sendBookmarksBar();
       sendBookmarkState();
+      sendBookmarkTree();
       return bookmarks;
+    },
+    createBookmarkFolderPage: (name) => {
+      const folder = store.createBookmarkFolder(currentProfileId, name);
+      sendBookmarkTree();
+      return folder;
+    },
+    renameBookmarkFolderPage: (folderId, name) => {
+      const folders = store.renameBookmarkFolder(currentProfileId, folderId, name);
+      sendBookmarkTree();
+      return folders;
+    },
+    removeBookmarkFolderPage: (folderId) => {
+      store.removeBookmarkFolder(currentProfileId, folderId);
+      sendBookmarksBar();
+      sendBookmarkTree();
+      return store.getBookmarksData(currentProfileId);
+    },
+    moveBookmarkPage: (bookmarkId, folderId) => {
+      const items = store.moveBookmark(currentProfileId, bookmarkId, folderId);
+      sendBookmarksBar();
+      sendBookmarkTree();
+      return items;
     },
     getDownloads: () => downloads,
     removeDownload: removeDownloadAction,
@@ -2342,6 +2418,7 @@ function createWindow(store, opts = {}) {
     sendProfiles();
     sendTheme();
     sendBookmarksBar();
+    sendBookmarkTree();
     sendDownloadsBadge();
     toolbar.webContents.send('extensions-partition', currentPartition());
     loadWorkspacesAndOpenTabs(opts.isInitial);
@@ -2380,6 +2457,8 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil:rename-workspace', (event, id, name) => ctxFor(event)?.renameWorkspace(id, name));
   ipcMain.on('woowil:delete-workspace', (event, id) => ctxFor(event)?.deleteWorkspace(id));
   ipcMain.on('woowil:toggle-bookmark', (event) => ctxFor(event)?.toggleBookmark());
+  ipcMain.on('woowil:confirm-add-bookmark', (event, data) => ctxFor(event)?.confirmAddBookmark(data));
+  ipcMain.on('woowil:get-bookmark-tree', (event) => ctxFor(event)?.getBookmarkTree());
   ipcMain.on('woowil:get-profiles', (event) => ctxFor(event)?.getProfiles());
   ipcMain.on('woowil:switch-profile', (event, id) => ctxFor(event)?.switchProfile(id));
   ipcMain.on('woowil:unlock-profile', (event, id, password) => ctxFor(event)?.unlockProfile(id, password));
@@ -2419,6 +2498,11 @@ function registerIpcHandlers(store) {
   ipcMain.handle('woowil-pages:delete-history-entry', (event, index) => tabCtxFor(event)?.deleteHistoryEntry(index) ?? []);
   ipcMain.handle('woowil-pages:get-bookmarks', (event) => tabCtxFor(event)?.getBookmarksPage() ?? []);
   ipcMain.handle('woowil-pages:remove-bookmark', (event, id) => tabCtxFor(event)?.removeBookmarkPage(id) ?? []);
+  ipcMain.handle('woowil-pages:get-bookmark-folders', (event) => tabCtxFor(event)?.getBookmarkFoldersPage() ?? []);
+  ipcMain.handle('woowil-pages:create-bookmark-folder', (event, name) => tabCtxFor(event)?.createBookmarkFolderPage(name) ?? null);
+  ipcMain.handle('woowil-pages:rename-bookmark-folder', (event, id, name) => tabCtxFor(event)?.renameBookmarkFolderPage(id, name) ?? []);
+  ipcMain.handle('woowil-pages:remove-bookmark-folder', (event, id) => tabCtxFor(event)?.removeBookmarkFolderPage(id) ?? null);
+  ipcMain.handle('woowil-pages:move-bookmark', (event, id, folderId) => tabCtxFor(event)?.moveBookmarkPage(id, folderId) ?? []);
   ipcMain.handle('woowil-pages:get-downloads', (event) => tabCtxFor(event)?.getDownloads() ?? []);
   ipcMain.handle('woowil-pages:remove-download', (event, id) => tabCtxFor(event)?.removeDownload(id) ?? []);
   ipcMain.on('woowil-pages:cancel-download', (event, id) => tabCtxFor(event)?.cancelDownload(id));

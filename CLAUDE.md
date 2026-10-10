@@ -698,6 +698,70 @@ password manager-koden, alle rettet og verificeret live:
   sandboxede miljø - se ovenfor): formel-payloads får korrekt `'`-prefix,
   normale værdier og eksisterende anførselstegn-escaping er upåvirket.
 
+## Bogmærke-mapper + favoritter-undermenu i panelet
+
+Rapporteret direkte af brugeren: bogmærke-baren viste alt fladt på én linje,
+ingen måde at organisere i mapper, og ingen steds at se hele listen uden at
+gå til `woowil://bookmarks`. Besluttet sammen med brugeren: **behold den
+eksisterende bogmærke-bar som den er** (flad linje af "pills"), men gør
+`★ Favoritter` i selve panelet (den der allerede har Indstillinger/Historik/
+Downloads osv.) til en udvides-i-panelet undermenu med mapper+bogmærker — og
+vælg mappe *når* man bogmærker, ikke bagefter.
+
+- **Datamodel** (`src/profile-store.js`): `bookmarks.json` var en flad
+  array — nu `{ folders: [...], items: [...] }`, med `folderId: null` for
+  "ingen mappe". **Bagudkompatibelt uden migrering af selve filen**:
+  `getBookmarksData()` normaliserer en gammel flad array til den nye form
+  ved hver læsning; filen skrives i det nye format først ved næste reelle
+  ændring. Verificeret direkte (ikke kun læst igennem) med et standalone
+  Node-script: en simuleret gammel flad `bookmarks.json` læses korrekt,
+  mappe-opret/omdøb/ikke-destruktiv-sletning (bogmærker flytter til "ingen
+  mappe", slettes aldrig) og duplikat-bogmærke-forebyggelse virker alle som
+  forventet.
+- **Tilføj-bogmærke-flowet ændrede sig**: at klikke ☆ på en ikke-bogmærket
+  side åbner nu en popover (samme floatExtra/`setOverlayOpen`-mønster som
+  adresseforslag/workspace-switcher — ingen ny main-process-layoutlogik
+  nødvendig) med titel + mappevalg (eksisterende mappe eller "+ Ny mappe…"),
+  i stedet for at bogmærke med det samme. Bogmærket skrives først ved
+  "Gem" (`confirmAddBookmarkAction` i `main.js`). At klikke ★ på en allerede
+  bogmærket side fjerner den stadig med det samme, ingen popover. "Annuller"
+  er ren renderer-side (intet er skrevet i main-processen før "Gem").
+- **Panelets `★ Favoritter`** (`favorites-section`/`favorites-toggle`/
+  `favorites-tree` i `toolbar.html`/`.js`) udvider sig nu INDE i panelet
+  (ingen ny main-process-logik her enten — panelet dækker allerede hele
+  vinduet når det er åbent) og viser mapper (collapsible, klik for at
+  folde ud/ind) + bogmærker (klik navigerer og lukker panelet), med et
+  "Administrer bogmærker →"-link til den fulde `woowil://bookmarks`-side
+  for omdøb/slet-mappe/flyt-bogmærke/eksport.
+- **`woowil://bookmarks`-siden** fik mappe-grupperet visning, "+ Ny
+  mappe"-knap, omdøb-mappe (samme dobbeltklik-for-at-redigere-mønster som
+  arbejdsområde-navne i panelet), slet-mappe (ikke-destruktiv — bogmærker
+  flytter til "Ingen mappe") og en per-bogmærke `<select>` til at flytte
+  mellem mapper. Netscape-bogmærke-eksporten nester nu også mapper som
+  `<H3>`-undermapper, i stedet for at eksportere alt fladt.
+- **Verificeret ende-til-ende mod den rigtige kørende app, ikke kun
+  kodelæst**: et CDP-script (`Runtime.evaluate` mod toolbar- og
+  `woowil://bookmarks`-WebContents' egne CDP-targets, fundet via
+  `--remote-debugging-port`+`/json`) kørte hele flowet gennem de ægte
+  `window.woowil`/`window.woowilPages`-bridge-funktioner: opret mappe +
+  bogmærke, flyt bogmærke til "ingen mappe" via den fulde side, slet mappen
+  og bekræft bogmærket overlevede. Et andet CDP-script brugte ægte
+  synthetic `.click()`/`.dispatchEvent()` på selve DOM'en (stjerneknap,
+  mappe-`<select>`, Gem-knap, panel-toggle) for at bekræfte selve UI'et:
+  popover åbner uden at bogmærke med det samme, "+ Ny mappe" afslører
+  tekstfeltet, Gem lukker popoveren og opdaterer stjerne-ikonet til ★,
+  panelets favoritter-undermenu viser den nye mappe når den foldes ud, og
+  et andet ★-klik på en allerede bogmærket side fjerner den og nulstiller
+  ikonet til ☆. **Husk at køre `node scripts/bundle-preloads.js` (eller
+  `npm start`, som har det som `prestart`) efter enhver `preload.js`-ændring
+  før test** — ramte selv dette: en stale `toolbar-preload.bundle.js` gav
+  "`window.woowil.onBookmarkTree is not a function`" ved første testkørsel.
+- **Ikke testet**: ægte museklik/tastatur på en rigtig skærm (samme
+  miljøbegrænsning som andre klik-tunge funktioner i dette repo — kun
+  synthetic `.click()` kunne køres her). Bed brugeren bekræfte visuelt på
+  egen maskine, særligt popoverens placering under ★-knappen ved forskellige
+  vinduesbredder.
+
 ## Filoversigt
 
 - `src/main.js` — main-process. Alt: vinduer, faner, arbejdsområder, profiler,

@@ -36,6 +36,18 @@
       <button id="downloads-button" title="Downloads">⬇<span id="downloads-badge" hidden>0</span></button>
       <button id="bookmark" title="Bogmærk">&#9734;</button>
     </div>
+    <div class="bookmark-add-popover" id="bookmark-add-popover" hidden>
+      <input id="bookmark-add-title" type="text" autocomplete="off" />
+      <select id="bookmark-add-folder">
+        <option value="">Ingen mappe</option>
+        <option value="__new__">+ Ny mappe…</option>
+      </select>
+      <input id="bookmark-add-new-folder" type="text" placeholder="Mappenavn..." autocomplete="off" hidden />
+      <div class="bookmark-add-actions">
+        <button id="bookmark-add-cancel" type="button">Annuller</button>
+        <button id="bookmark-add-save" type="button">Gem</button>
+      </div>
+    </div>
     <div class="find-bar" id="find-bar" hidden>
       <input id="find-input" type="text" placeholder="Find på siden..." autocomplete="off" />
       <span id="find-count"></span>
@@ -71,7 +83,10 @@
       <nav class="panel-links">
         <button data-nav="woowil://settings">⚙ Indstillinger</button>
         <button data-nav="woowil://history">🕘 Historik</button>
-        <button data-nav="woowil://bookmarks">★ Favoritter</button>
+        <div class="favorites-section" id="favorites-section">
+          <button id="favorites-toggle" type="button">★ Favoritter <span class="favorites-chevron">▾</span></button>
+          <div class="favorites-tree" id="favorites-tree" hidden></div>
+        </div>
         <button data-nav="woowil://downloads">⬇ Downloads</button>
         <button data-nav="woowil://extensions">🧩 Udvidelser</button>
         <button data-nav="woowil://passwords">🔑 Adgangskoder</button>

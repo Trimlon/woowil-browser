@@ -179,35 +179,116 @@ class ProfileStore {
     return history;
   }
 
+  // bookmarks.json used to be a bare array of bookmarks. Folders added a
+  // second top-level list, so the file is now { folders, items } — but an
+  // existing profile's file on disk is still the old array shape until its
+  // next write, so every read normalizes it rather than migrating the file
+  // immediately.
+  bookmarksFile(id) {
+    return path.join(this.profileDir(id), 'bookmarks.json');
+  }
+
+  getBookmarksData(id) {
+    const raw = readJSON(this.bookmarksFile(id), { folders: [], items: [] });
+    if (Array.isArray(raw)) {
+      return { folders: [], items: raw.map((b) => ({ folderId: null, ...b })) };
+    }
+    return { folders: raw.folders || [], items: raw.items || [] };
+  }
+
+  writeBookmarksData(id, data) {
+    writeJSON(this.bookmarksFile(id), data);
+  }
+
   getBookmarks(id) {
-    return readJSON(path.join(this.profileDir(id), 'bookmarks.json'), []);
+    return this.getBookmarksData(id).items;
+  }
+
+  getBookmarkFolders(id) {
+    return this.getBookmarksData(id).folders;
   }
 
   isBookmarked(id, url) {
     return this.getBookmarks(id).some((bookmark) => bookmark.url === url);
   }
 
-  // Returns the new bookmarked state (true if just added, false if just
-  // removed).
-  toggleBookmark(id, url, title) {
-    const bookmarks = this.getBookmarks(id);
-    const index = bookmarks.findIndex((bookmark) => bookmark.url === url);
-    let isBookmarked;
-    if (index === -1) {
-      bookmarks.unshift({ id: crypto.randomUUID(), url, title: title || url, addedAt: Date.now() });
-      isBookmarked = true;
-    } else {
-      bookmarks.splice(index, 1);
-      isBookmarked = false;
+  // Adds a bookmark. No-op (returns null) if the URL is already bookmarked —
+  // the caller (the star button) only ever calls this for a URL it already
+  // checked isn't bookmarked yet, but a second, unrelated caller should
+  // never be able to create a duplicate entry for the same URL.
+  addBookmark(id, url, title, folderId = null) {
+    const data = this.getBookmarksData(id);
+    if (data.items.some((bookmark) => bookmark.url === url)) {
+      return null;
     }
-    writeJSON(path.join(this.profileDir(id), 'bookmarks.json'), bookmarks);
-    return isBookmarked;
+    const bookmark = { id: crypto.randomUUID(), url, title: title || url, addedAt: Date.now(), folderId: folderId || null };
+    data.items.unshift(bookmark);
+    this.writeBookmarksData(id, data);
+    return bookmark;
+  }
+
+  removeBookmarkByUrl(id, url) {
+    const data = this.getBookmarksData(id);
+    const index = data.items.findIndex((bookmark) => bookmark.url === url);
+    if (index === -1) {
+      return false;
+    }
+    data.items.splice(index, 1);
+    this.writeBookmarksData(id, data);
+    return true;
   }
 
   removeBookmark(id, bookmarkId) {
-    const bookmarks = this.getBookmarks(id).filter((bookmark) => bookmark.id !== bookmarkId);
-    writeJSON(path.join(this.profileDir(id), 'bookmarks.json'), bookmarks);
-    return bookmarks;
+    const data = this.getBookmarksData(id);
+    data.items = data.items.filter((bookmark) => bookmark.id !== bookmarkId);
+    this.writeBookmarksData(id, data);
+    return data.items;
+  }
+
+  moveBookmark(id, bookmarkId, folderId) {
+    const data = this.getBookmarksData(id);
+    const bookmark = data.items.find((b) => b.id === bookmarkId);
+    if (!bookmark) {
+      return data.items;
+    }
+    bookmark.folderId = folderId || null;
+    this.writeBookmarksData(id, data);
+    return data.items;
+  }
+
+  createBookmarkFolder(id, name) {
+    const data = this.getBookmarksData(id);
+    const folder = { id: crypto.randomUUID(), name: (name || '').trim() || 'Ny mappe', createdAt: Date.now() };
+    data.folders.push(folder);
+    this.writeBookmarksData(id, data);
+    return folder;
+  }
+
+  renameBookmarkFolder(id, folderId, name) {
+    const data = this.getBookmarksData(id);
+    const folder = data.folders.find((f) => f.id === folderId);
+    if (!folder) {
+      return data.folders;
+    }
+    folder.name = (name || '').trim() || folder.name;
+    this.writeBookmarksData(id, data);
+    return data.folders;
+  }
+
+  // Deleting a folder never deletes the bookmarks in it — they move back to
+  // the root (folderId: null), matching this project's existing
+  // "removing a container is never destructive to what's inside it"
+  // convention (see e.g. logoutWoowilAccount in woowil-browser's CLAUDE.md).
+  removeBookmarkFolder(id, folderId) {
+    const data = this.getBookmarksData(id);
+    data.folders = data.folders.filter((f) => f.id !== folderId);
+    for (const bookmark of data.items) {
+      if (bookmark.folderId === folderId) {
+        bookmark.folderId = null;
+      }
+    }
+    this.writeBookmarksData(id, data);
+    return data;
   }
 
   getDownloads(id) {

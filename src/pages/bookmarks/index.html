@@ -33,9 +33,28 @@
       h1 {
         font-size: 1.4rem;
       }
+      h2 {
+        font-size: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 1.4rem 0 0.4rem;
+      }
+      h2[contenteditable='true'] {
+        outline: none;
+        border-bottom: 1px solid var(--accent);
+      }
+      h2 .folder-remove {
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-size: 13px;
+      }
       ul {
         list-style: none;
         padding: 0;
+        margin: 0;
       }
       li {
         display: flex;
@@ -51,10 +70,20 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        flex: 1;
+        min-width: 0;
       }
       li a:hover {
         color: var(--accent);
         text-decoration: underline;
+      }
+      li select {
+        flex-shrink: 0;
+        font-size: 12px;
+        background: var(--bg-elevated);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
       }
       .empty {
         color: var(--text-secondary);
@@ -62,6 +91,7 @@
       .toolbar-row {
         display: flex;
         justify-content: flex-end;
+        gap: 8px;
         margin-bottom: 0.6rem;
       }
       .toolbar-row button {
@@ -88,58 +118,195 @@
         flex-shrink: 0;
         cursor: pointer;
       }
+      #new-folder-form {
+        display: flex;
+        gap: 6px;
+        margin: 0.6rem 0;
+      }
+      #new-folder-form.hidden {
+        display: none;
+      }
+      #new-folder-form input {
+        flex: 1;
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg-elevated);
+        color: var(--text);
+      }
+      #new-folder-form button {
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
     <h1>Favoritter</h1>
     <div class="toolbar-row">
+      <button id="new-folder-btn" type="button">+ Ny mappe</button>
       <button id="export-btn" type="button">Eksportér bogmærker…</button>
     </div>
+    <form id="new-folder-form" class="hidden">
+      <input id="new-folder-name" placeholder="Mappenavn..." autocomplete="off" />
+      <button type="submit">Opret</button>
+    </form>
     <p class="error hidden" id="error"></p>
-    <ul id="list"></ul>
+    <div id="sections"></div>
 
     <script>
-      const list = document.getElementById('list');
+      const sections = document.getElementById('sections');
       const exportBtn = document.getElementById('export-btn');
       const errorEl = document.getElementById('error');
+      const newFolderBtn = document.getElementById('new-folder-btn');
+      const newFolderForm = document.getElementById('new-folder-form');
+      const newFolderName = document.getElementById('new-folder-name');
+
+      let folders = [];
+      let bookmarks = [];
 
       function showError(message) {
         errorEl.textContent = message || '';
         errorEl.classList.toggle('hidden', !message);
       }
 
-      function render(bookmarks) {
-        list.innerHTML = '';
-        if (bookmarks.length === 0) {
-          list.innerHTML = '<p class="empty">Ingen favoritter endnu.</p>';
+      function folderOptionsHtml(selectedId) {
+        let html = `<option value=""${!selectedId ? ' selected' : ''}>Ingen mappe</option>`;
+        for (const folder of folders) {
+          html += `<option value="${folder.id}"${folder.id === selectedId ? ' selected' : ''}>${folder.name}</option>`;
+        }
+        return html;
+      }
+
+      function createBookmarkRow(bookmark) {
+        const li = document.createElement('li');
+
+        const link = document.createElement('a');
+        link.href = bookmark.url;
+        link.textContent = bookmark.title || bookmark.url;
+        li.appendChild(link);
+
+        const folderSelect = document.createElement('select');
+        folderSelect.innerHTML = folderOptionsHtml(bookmark.folderId);
+        folderSelect.addEventListener('change', () => {
+          window.woowilPages.moveBookmark(bookmark.id, folderSelect.value || null).then(render);
+        });
+        li.appendChild(folderSelect);
+
+        const remove = document.createElement('button');
+        remove.className = 'remove';
+        remove.textContent = '×';
+        remove.addEventListener('click', () => {
+          window.woowilPages.removeBookmark(bookmark.id).then(render);
+        });
+        li.appendChild(remove);
+
+        return li;
+      }
+
+      function renderGroup(items) {
+        const ul = document.createElement('ul');
+        if (items.length === 0) {
+          const empty = document.createElement('p');
+          empty.className = 'empty';
+          empty.textContent = 'Ingen bogmærker her endnu.';
+          return empty;
+        }
+        for (const bookmark of items) {
+          ul.appendChild(createBookmarkRow(bookmark));
+        }
+        return ul;
+      }
+
+      function render() {
+        sections.innerHTML = '';
+
+        if (folders.length === 0 && bookmarks.length === 0) {
+          const empty = document.createElement('p');
+          empty.className = 'empty';
+          empty.textContent = 'Ingen favoritter endnu.';
+          sections.appendChild(empty);
           return;
         }
-        for (const bookmark of bookmarks) {
-          const li = document.createElement('li');
 
-          const link = document.createElement('a');
-          link.href = bookmark.url;
-          link.textContent = bookmark.title || bookmark.url;
-          li.appendChild(link);
+        const rootItems = bookmarks.filter((b) => !b.folderId);
+        sections.appendChild(renderGroup(rootItems));
 
-          const remove = document.createElement('button');
-          remove.className = 'remove';
-          remove.textContent = '×';
-          remove.addEventListener('click', () => {
-            window.woowilPages.removeBookmark(bookmark.id).then(render);
+        for (const folder of folders) {
+          const heading = document.createElement('h2');
+          const name = document.createElement('span');
+          name.textContent = `📁 ${folder.name}`;
+          name.title = 'Dobbeltklik for at omdøbe';
+          name.addEventListener('dblclick', () => {
+            name.contentEditable = 'true';
+            name.focus();
+            document.getSelection().selectAllChildren(name);
           });
-          li.appendChild(remove);
+          name.addEventListener('blur', () => {
+            if (name.isContentEditable) {
+              name.contentEditable = 'false';
+              window.woowilPages.renameBookmarkFolder(folder.id, name.textContent).then(loadAndRender);
+            }
+          });
+          name.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              name.blur();
+            }
+          });
+          heading.appendChild(name);
 
-          list.appendChild(li);
+          const del = document.createElement('button');
+          del.className = 'folder-remove';
+          del.textContent = '× Slet mappe';
+          del.title = 'Sletter kun mappen — bogmærkerne i den flyttes til "Ingen mappe"';
+          del.addEventListener('click', () => {
+            window.woowilPages.removeBookmarkFolder(folder.id).then(loadAndRender);
+          });
+          heading.appendChild(del);
+
+          sections.appendChild(heading);
+          sections.appendChild(renderGroup(bookmarks.filter((b) => b.folderId === folder.id)));
         }
       }
 
-      window.woowilPages.getBookmarks().then(render);
+      function loadAndRender() {
+        return Promise.all([window.woowilPages.getBookmarkFolders(), window.woowilPages.getBookmarks()]).then(
+          ([f, b]) => {
+            folders = f;
+            bookmarks = b;
+            render();
+          },
+        );
+      }
+
+      loadAndRender();
       window.woowilPages.getSettings().then((settings) => {
         document.documentElement.dataset.theme = settings.theme;
       });
       window.woowilPages.onThemeChange((theme) => {
         document.documentElement.dataset.theme = theme;
+      });
+
+      newFolderBtn.addEventListener('click', () => {
+        newFolderForm.classList.toggle('hidden');
+        if (!newFolderForm.classList.contains('hidden')) {
+          newFolderName.focus();
+        }
+      });
+      newFolderForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        if (!newFolderName.value.trim()) {
+          return;
+        }
+        window.woowilPages.createBookmarkFolder(newFolderName.value).then(() => {
+          newFolderForm.reset();
+          newFolderForm.classList.add('hidden');
+          loadAndRender();
+        });
       });
 
       exportBtn.addEventListener('click', async () => {

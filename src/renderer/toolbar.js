@@ -7,6 +7,15 @@ const addressInput = document.getElementById('address');
 const securityIndicator = document.getElementById('security-indicator');
 const bookmarkButton = document.getElementById('bookmark');
 const bookmarksBar = document.getElementById('bookmarks-bar');
+const bookmarkAddPopover = document.getElementById('bookmark-add-popover');
+const bookmarkAddTitle = document.getElementById('bookmark-add-title');
+const bookmarkAddFolder = document.getElementById('bookmark-add-folder');
+const bookmarkAddNewFolder = document.getElementById('bookmark-add-new-folder');
+const bookmarkAddCancel = document.getElementById('bookmark-add-cancel');
+const bookmarkAddSave = document.getElementById('bookmark-add-save');
+const favoritesSection = document.getElementById('favorites-section');
+const favoritesToggle = document.getElementById('favorites-toggle');
+const favoritesTree = document.getElementById('favorites-tree');
 const suggestionsBox = document.getElementById('suggestions');
 const zoomIndicator = document.getElementById('zoom-indicator');
 const extensionsBar = document.getElementById('extensions-bar');
@@ -86,6 +95,7 @@ function closeAllOverlays() {
   hideSuggestions();
   closeTabContextMenu();
   closeWorkspaceMenu();
+  closeBookmarkAddPopover();
 }
 
 // -- Navigation controls --------------------------------------------------
@@ -414,6 +424,170 @@ window.woowil.onBookmarksBar((bookmarks) => {
   }
 });
 window.woowil.getBookmarksBar();
+
+// -- Bookmark-add popover (folder picker shown when bookmarking a new page) -
+
+let pendingBookmarkUrl = null;
+
+function closeBookmarkAddPopover() {
+  if (!bookmarkAddPopover.hidden) {
+    bookmarkAddPopover.hidden = true;
+    pendingBookmarkUrl = null;
+    window.woowil.setOverlayOpen(false, 0);
+  }
+}
+
+function openBookmarkAddPopover({ url, title, folders }) {
+  closeAllOverlays();
+  pendingBookmarkUrl = url;
+  bookmarkAddTitle.value = title || url;
+  bookmarkAddFolder.querySelectorAll('option[data-folder]').forEach((option) => option.remove());
+  for (const folder of folders) {
+    const option = document.createElement('option');
+    option.value = folder.id;
+    option.dataset.folder = '1';
+    option.textContent = folder.name;
+    bookmarkAddFolder.insertBefore(option, bookmarkAddFolder.querySelector('option[value="__new__"]'));
+  }
+  bookmarkAddFolder.value = '';
+  bookmarkAddNewFolder.hidden = true;
+  bookmarkAddNewFolder.value = '';
+  bookmarkAddPopover.hidden = false;
+  bookmarkAddTitle.focus();
+  window.woowil.setOverlayOpen(true, bookmarkAddPopover.offsetTop + bookmarkAddPopover.offsetHeight);
+}
+
+window.woowil.onBookmarkAddPrompt((data) => openBookmarkAddPopover(data));
+
+bookmarkAddFolder.addEventListener('change', () => {
+  const isNew = bookmarkAddFolder.value === '__new__';
+  bookmarkAddNewFolder.hidden = !isNew;
+  if (isNew) {
+    bookmarkAddNewFolder.focus();
+  }
+});
+
+bookmarkAddCancel.addEventListener('click', closeBookmarkAddPopover);
+
+bookmarkAddSave.addEventListener('click', () => {
+  if (!pendingBookmarkUrl) {
+    return;
+  }
+  const isNew = bookmarkAddFolder.value === '__new__';
+  window.woowil.confirmAddBookmark({
+    url: pendingBookmarkUrl,
+    title: bookmarkAddTitle.value,
+    folderId: isNew ? null : bookmarkAddFolder.value || null,
+    newFolderName: isNew ? bookmarkAddNewFolder.value : null,
+  });
+  closeBookmarkAddPopover();
+});
+
+document.addEventListener('mousedown', (event) => {
+  if (!bookmarkAddPopover.hidden && !bookmarkAddPopover.contains(event.target) && event.target !== bookmarkButton) {
+    closeBookmarkAddPopover();
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeBookmarkAddPopover();
+  }
+});
+
+// -- Favorites tree (panel submenu: folders + bookmarks) ---------------------
+
+let latestBookmarkTree = { folders: [], items: [] };
+const expandedFolders = new Set();
+
+function renderFavoritesTree() {
+  const { folders, items } = latestBookmarkTree;
+  favoritesTree.innerHTML = '';
+
+  if (folders.length === 0 && items.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'favorites-empty';
+    empty.textContent = 'Ingen favoritter endnu.';
+    favoritesTree.appendChild(empty);
+  }
+
+  const rootItems = items.filter((bookmark) => !bookmark.folderId);
+  for (const bookmark of rootItems) {
+    favoritesTree.appendChild(createFavoriteItemEl(bookmark));
+  }
+
+  for (const folder of folders) {
+    const folderItems = items.filter((bookmark) => bookmark.folderId === folder.id);
+    const isOpen = expandedFolders.has(folder.id);
+
+    const header = document.createElement('div');
+    header.className = 'favorites-folder-header';
+    const chevron = document.createElement('span');
+    chevron.className = 'favorites-chevron';
+    chevron.textContent = isOpen ? '▾' : '▸';
+    header.appendChild(chevron);
+    const name = document.createElement('span');
+    name.textContent = `📁 ${folder.name} (${folderItems.length})`;
+    header.appendChild(name);
+    header.addEventListener('click', () => {
+      if (expandedFolders.has(folder.id)) {
+        expandedFolders.delete(folder.id);
+      } else {
+        expandedFolders.add(folder.id);
+      }
+      renderFavoritesTree();
+    });
+    favoritesTree.appendChild(header);
+
+    if (isOpen) {
+      const itemsWrap = document.createElement('div');
+      itemsWrap.className = 'favorites-folder-items';
+      for (const bookmark of folderItems) {
+        itemsWrap.appendChild(createFavoriteItemEl(bookmark));
+      }
+      favoritesTree.appendChild(itemsWrap);
+    }
+  }
+
+  const manage = document.createElement('button');
+  manage.type = 'button';
+  manage.className = 'favorites-manage';
+  manage.textContent = 'Administrer bogmærker →';
+  manage.addEventListener('click', () => {
+    window.woowil.navigate('woowil://bookmarks');
+    closePanel();
+  });
+  favoritesTree.appendChild(manage);
+}
+
+function createFavoriteItemEl(bookmark) {
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'favorites-item';
+  item.textContent = bookmark.title || bookmark.url;
+  item.title = bookmark.url;
+  item.addEventListener('click', () => {
+    window.woowil.navigate(bookmark.url);
+    closePanel();
+  });
+  return item;
+}
+
+favoritesToggle.addEventListener('click', () => {
+  const opening = favoritesTree.hidden;
+  favoritesTree.hidden = !opening;
+  favoritesSection.classList.toggle('open', opening);
+  if (opening) {
+    renderFavoritesTree();
+  }
+});
+
+window.woowil.onBookmarkTree((data) => {
+  latestBookmarkTree = data;
+  if (!favoritesTree.hidden) {
+    renderFavoritesTree();
+  }
+});
+window.woowil.getBookmarkTree();
 
 // -- Zoom ---------------------------------------------------------------
 

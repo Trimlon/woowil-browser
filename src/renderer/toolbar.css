@@ -351,6 +351,58 @@ body {
   white-space: nowrap;
 }
 
+/* Anchored under the ★ button via a fixed offset matching the tabstrip +
+   toolbar height (same technique .workspace-menu uses under
+   #workspace-switcher), rather than relative to .toolbar — .toolbar itself
+   isn't a positioning context. */
+.bookmark-add-popover {
+  position: absolute;
+  top: 76px;
+  right: 6px;
+  width: 220px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+  padding: 10px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bookmark-add-popover input,
+.bookmark-add-popover select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.bookmark-add-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+.bookmark-add-actions button {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--tab-active-bg);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+#bookmark-add-save {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 /* browser-action-list (electron-chrome-extensions) renders its own icon
    buttons/badges inside a shadow DOM - only its own outer layout within the
    toolbar row is styled here, via the CSS shadow-parts it exposes. */
@@ -593,6 +645,91 @@ body {
 }
 .panel nav.panel-links button:hover {
   background: var(--panel-item-hover);
+}
+
+.favorites-section {
+  display: flex;
+  flex-direction: column;
+}
+.favorites-section #favorites-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  width: 100%;
+}
+.favorites-section #favorites-toggle:hover {
+  background: var(--panel-item-hover);
+}
+.favorites-chevron {
+  transition: transform 0.15s;
+}
+.favorites-section.open .favorites-chevron {
+  transform: rotate(180deg);
+}
+.favorites-tree {
+  padding-left: 8px;
+  margin-bottom: 4px;
+}
+.favorites-folder-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.favorites-folder-header:hover {
+  background: var(--panel-item-hover);
+}
+.favorites-folder-header .favorites-chevron {
+  font-size: 11px;
+}
+.favorites-folder-items {
+  padding-left: 16px;
+}
+.favorites-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 6px;
+}
+.favorites-item:hover {
+  background: var(--panel-item-hover);
+}
+.favorites-empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.favorites-manage {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  background: none;
+  border: none;
 }
 
 .panel h2 {
