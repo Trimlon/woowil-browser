@@ -1043,6 +1043,15 @@ function createWindow(store, opts = {}) {
     }
     permissionsHandledPartitions.add(partition);
     session.fromPartition(partition).setPermissionRequestHandler((webContents, permission, callback, details) => {
+      // Writing to the clipboard via navigator.clipboard.writeText() (the
+      // "copy" button on most code boxes) is auto-granted without a prompt
+      // in a real browser when triggered by a genuine click - there is no
+      // user-facing banner for this in Chrome either, so we match that
+      // instead of routing it through the prompt banner below.
+      if (permission === 'clipboard-sanitized-write') {
+        callback(true);
+        return;
+      }
       if (!['media', 'geolocation', 'notifications'].includes(permission)) {
         callback(false);
         return;

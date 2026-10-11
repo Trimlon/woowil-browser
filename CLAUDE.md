@@ -957,6 +957,44 @@ grundigt (webresearch, ikke kun gættet):
   stabil build der matcher/overgår `44.4.x`, og vurdér da på ny om 720p-capet
   stadig gør det værd besværet.
 
+## Kopiér-knapper i kodebokse virkede ikke altid
+
+Rapporteret direkte af brugeren: uanset hvilken side med en "copy"-knap i en
+kodeboks, virkede klik på den nogle gange ikke (ingen fejl synlig for
+brugeren, bare intet kopieret) — markér teksten og højreklik → kopiér virkede
+altid som workaround.
+
+**Root cause**: `ensurePermissionsHandled()`'s `setPermissionRequestHandler`
+i `src/main.js` havde en hvidliste på kun `['media', 'geolocation',
+'notifications']` — enhver anden tilladelse blev afvist stille med
+`callback(false)`, uden varsel til brugeren. De fleste moderne "copy"-knapper
+bruger `navigator.clipboard.writeText()` (Chromiums `clipboard-sanitized-
+write`-tilladelse), i stedet for det gamle `document.execCommand('copy')`
+(som ikke kræver nogen tilladelse og derfor altid virkede) — det forklarer
+hvorfor det kun ramte NOGLE sider. Markér+højreklik-kopiér går helt uden om
+JS Clipboard-API'et (bruger OS'ets udklipsholder direkte via konteksmenuen),
+derfor virkede det altid.
+
+**Fix**: `clipboard-sanitized-write` godkendes nu med det samme
+(`callback(true)`), uden om prompt-bjælken — matcher hvordan en rigtig
+browser (Chrome m.fl.) selv håndterer det: at skrive til udklipsholderen fra
+et rigtigt klik kræver ikke et samtykke-UI i nogen gængs browser, kun en
+faktisk menneske-udløst handling (som Chromium allerede selv sikrer via sin
+egen "transient activation"-kontrol, uafhængigt af denne apps egen
+tilladelses-hvidliste).
+
+**Verificeret direkte, begge veje** (CDP mod en rigtig kørende `npx
+electron .`-instans, en lokal `http://127.0.0.1:<port>`-side med en knap der
+kalder `navigator.clipboard.writeText()` — `http://127.0.0.1` tæller som en
+"secure context" i Chromium, i modsætning til en `data:`-URL, som IKKE gør og
+derfor gav et helt andet, vildledende resultat i et første testforsøg):
+uden fixet fejlede kaldet med nøjagtig `"Failed to execute 'writeText' on
+'Clipboard': Write permission denied."`; med fixet lykkedes det. `clipboard-
+read` (JS-initieret "paste", bruges langt sjældnere af almindelige sider) er
+bevidst IKKE tilføjet til hvidlisten — det er en mere sensitiv handling (kan
+læse hvad som helst brugeren har kopieret fra andre apps) og rammer ikke
+denne konkrete klage.
+
 ## Ting brugeren bevidst har fravalgt/udskudt
 
 - Konto-sync på tværs af enheder (kun lokale profiler).
