@@ -661,6 +661,97 @@ statisk kodelæsning + den isolerede algoritme-test af `reorderTab` ovenfor.
 **Bed brugeren bekræfte alle tre punkter på egen maskine** før dette regnes
 for færdigt verificeret.
 
+## Fanetræk på tværs af skærme/vinduer + synlig træk-feedback (v0.4.6)
+
+Tre relaterede ønsker fra brugeren samtidig: en fane trukket helt fri landede
+altid på den indbyggede skærm uanset hvor den blev sluppet; en fane kunne
+ikke trækkes ind i et allerede åbent Woowil-vindue; selve trækket havde
+ingen synlig feedback (Chrome viser en lille flydende fane-miniature der
+følger musen).
+
+**Fælles rodårsag, én fælles fix**: HTML5 drag-and-drop (den eksisterende
+omarrangerings-/udtræk-gestus fra v0.4.2 ovenfor) giver kun renderer'en
+DOM-events mens musen er over EN ELLER ANDEN Chromium-overflade - så snart
+den forlader kilde-vinduets grænser (ud på skrivebordet, et andet
+skærmbillede, eller et helt andet Woowil-vindue), får renderer'en intet
+før `dragend` fyrer tilbage i det OPRINDELIGE vindue, uden koordinater og
+uden nogen måde at vide hvor dropped faktisk skete. Løsningen: én global
+"drag-session" i `main.js`, drevet af at polle
+`screen.getCursorScreenPoint()` (virker uanset hvilket vindue/skærm/app
+musen er over lige nu) - den polled position driver både et lille
+altid-øverst preview-vindue (synlig feedback, hver "tick") OG - ved drop -
+afgør om fanen skal flettes ind i et andet åbent Woowil-vindue eller åbne
+et nyt på den rigtige skærm.
+
+**Implementering** (alt nyt i `src/main.js`, uden om det eksisterende
+`reorderTab`/in-strip-drop, som er uændret):
+- `startTabDrag(sourceCtx, tabId, title)` (kaldt fra `dragstart`, via ny IPC
+  `woowil:tab-drag-start`) opretter et lille frameless, transparent,
+  `alwaysOnTop`, `skipTaskbar`, `focusable:false` `BrowserWindow` (bevidst
+  IKKE `BaseWindow`+`WebContentsView` som app-hovedvinduerne - intet behov
+  for fane-multipleksering her, kun en engangs-visuel overlay, så det
+  simplere værktøj er det rigtige), med `setIgnoreMouseEvents(true)` så det
+  aldrig stjæler selve droppet fra det der reelt ligger under musen.
+  `setInterval(..., 16)` flytter det til `screen.getCursorScreenPoint()`
+  hver "tick".
+- `finishTabDrag(sourceCtx, tabId)` (kaldt fra `dragend` via ny IPC
+  `woowil:tab-drag-end`, men KUN når `dropEffect !== 'move'` - en almindelig
+  omarrangering inden i samme stribe går stadig den uændrede vej og rydder
+  blot preview-vinduet op via samme kald med et `wasReordered`-flag) læser
+  den sidste polled musepositon og tjekker FØRST om den ligger inden for et
+  andet åbent, IKKE-inkognito-mismatchende vindues `win.getBounds()`
+  (aldrig tilbyd fletning på tværs af inkognito/almindelig-grænsen, samme
+  forventning som Chrome selv håndhæver) - hvis ja, `otherCtx.adoptTab(url)`
+  + `sourceCtx.closeTab(tabId)` direkte (IKKE via `detachTabToWindow`, hvis
+  "kun denne ene fane tilbage"-værn er forkert her: at flette et vindues
+  sidste fane ind i et andet er en ægte, meningsfuld handling, og
+  `closeTab()` lukker allerede det nu-tomme kildevindue helt af sig selv).
+  Ellers (intet vindue under musen): `screen.getDisplayNearestPoint(point)`
+  + clamp til den skærms `workArea` afgør det nye vindues `x`/`y`, sendt
+  videre til `createWindow(store, { startupUrl, position })` (ny
+  `opts.position`, blot spredt ind i `BaseWindow`-konstruktørens `x`/`y`).
+
+**Verificeret live** med en selvstændig CDP-testrig MED rigtig musestyring
+(denne sandkasse har - i modsætning til tidligere antaget - en rigtig
+X11-session med fungerende `xdotool`/`wmctrl`, bekræftet denne session):
+kaldte `window.woowil.tabDragStart/tabDragEnd` direkte via CDP (ægte
+museklik-drevet HTML5-drag kan stadig ikke simuleres pålideligt, som
+tidligere noteret - men selve main-proces-logikken, som er det nye her, er
+fuldstændig uafhængig af hvordan drag-eventet selv blev udløst), med
+`xdotool mousemove` til at flytte den RIGTIGE markør undervejs:
+- Preview-vindue oprettes ved `tabDragStart` (bekræftet som nyt CDP-target)
+  og ryddes korrekt op igen BÅDE ved en almindelig omarrangering (intet nyt
+  vindue, ingen lækage) og ved et ægte udtræk.
+- Ægte udtræk UDEN et andet vindue under musen åbnede et nyt vindue, der
+  landede tæt på det faktiske droppunkt (testet droppet ved (1500,850) på
+  en 1920×1080-skærm - nye vindue landede på (966,628), markant forskudt
+  fra standardplaceringen og korrekt klemt inden for skærmens grænser) -
+  den oprindelige klage ("lander altid på indbygget skærm") er løst for
+  positionering inden for ÉN skærm.
+- Fletning: oprettede et andet vindue, flyttede markøren til midten af dets
+  rigtige, virkelige X11-vindue (fundet via `wmctrl -l -G`, ikke gættet),
+  droppede der - fanetallet i kildevinduet faldt med 1, måltallet steg med
+  1, intet tredje vindue blev oprettet. Testede specifikt kant-tilfældet
+  "kildevinduets sidste fane" separat fra denne måling (se kommentaren i
+  `finishTabDrag`) for ikke at blande det ind i en simpel optælling.
+
+**Ikke verificeret**: rigtig multi-skærm-placering (`getDisplayNearestPoint`
+vælger korrekt skærm) - denne sandkasse har kun ét skærmbillede (1920×1080),
+samme begrænsning som ramte woowil-os-taskbar-arbejdet. Mekanismen er den
+tekstbogs-korrekte, standard Electron-måde at gøre det på, men **bed
+brugeren bekræfte på deres egen rigtige multi-skærm-opsætning** at et nyt
+vindue rent faktisk lander på den skærm, fanen blev sluppet på.
+
+**Også fundet og rettet undervejs (ikke en del af selve featuren)**: denne
+sessions egne CDP-testscripts lækkede gentagne Electron-processer - `child.
+kill()` dræbte kun `npx`-wrapperen, ikke selve Electron-processen, fordi
+`main.js`s eget `--ozone-platform=x11`-genstart-trick (se filens egen
+header-kommentar) bruger en FULDT DETACHED `spawn()`, som overlever sin
+launcher uden problemer. 8 forældreløse Electron-instanser var ophobet, da
+dette blev opdaget og ryddet op (`pkill -9 -f <user-data-dir>` i stedet for
+`child.kill()` i test-scriptet fremover) - ikke en fejl i selve appen, kun i
+testriggen, men værd at huske til senere CDP-baserede tests i dette repo.
+
 ## Sikkerhedsfund fra en review (rettet)
 
 Tre reelle, ikke-teoretiske huller fundet ved en sikkerhedsgennemgang af
@@ -994,6 +1085,72 @@ read` (JS-initieret "paste", bruges langt sjældnere af almindelige sider) er
 bevidst IKKE tilføjet til hvidlisten — det er en mere sensitiv handling (kan
 læse hvad som helst brugeren har kopieret fra andre apps) og rammer ikke
 denne konkrete klage.
+
+## itch.io login hang på "udfører sikkerhedsverificering" (Cloudflare Turnstile)
+
+Rapporteret direkte af brugeren: login på itch.io kommer aldrig videre fra
+"verificér at du er et menneske". Undersøgt live med CDP mod en rigtig
+kørende `npx electron .`-instans (samme disciplin som clipboard-fixet
+ovenfor) — ikke kun gættet.
+
+**Konkret fund**: itch.io's `/login` svarer med HTTP 403 og en Cloudflare
+"Udfører sikkerhedsverificering"-side, som loader en **Turnstile**-widget,
+men widgettens egen iframe bliver ALDRIG indsat i DOM'et (bekræftet:
+`document.querySelectorAll('iframe')` tomt 30+ sekunder i træk) — den sidder
+altså fast for evigt, ikke bare langsom.
+
+**Root cause isoleret (sammenlignede `navigator.userAgent` mod
+`navigator.userAgentData`)**: `ensureUserAgentHandled()` renser allerede den
+klassiske UA-streng til at se ud som rigtig Google Chrome (se afsnittet
+ovenfor om Hetzner-bannret) — men Electrons SEPARATE, strukturerede Client
+Hints (`navigator.userAgentData.brands`, og `Sec-CH-UA`/`Sec-CH-UA-Full-
+Version-List`-headerne sendt på hver request, bekræftet direkte via CDP's
+`Network.requestWillBeSentExtraInfo`) rapporterede ærligt kun `"Chromium"`,
+ALDRIG `"Google Chrome"` — der findes ingen simpel switch for dette, i
+modsætning til den klassiske UA-streng. Den uoverensstemmelse (påstår Chrome
+ét sted, indrømmer "bare Chromium" et andet, maskinlæsbart sted) er præcis
+den slags inkonsistens bot-detection som Cloudflares er bygget til at fange
+— værre end ærligt at udgive sig for en anden, men INTERN konsistent browser
+(Brave/Vivaldi/Edge klarer sig fint, fordi DE er konsistente om deres eget
+brand). Siden UA-strengen allerede bevidst blev gjort Chrome-lignende (for at
+fixe Hetzner), er den konsekvente fix at få Client Hints til at stemme
+overens med det valg, ikke at fortryde det.
+
+**Fix, begge halvdele**:
+- `ensureUserAgentHandled()` (`src/main.js`) sætter nu også
+  `webRequest.onBeforeSendHeaders` på partitionen, som tilføjer `"Google
+  Chrome";v="<major>"` til `Sec-CH-UA` og `"Google Chrome";v="<fuld
+  version>"` til `Sec-CH-UA-Full-Version-List`, udledt af samme rensede
+  UA-streng.
+- `src/pages-preload.js` (kører på ALLE almindelige faner, ikke kun
+  `woowil://`) patcher `navigator.userAgentData` tilsvarende via
+  `contextBridge.executeInMainWorld` — skal være main-world-koden, ikke en
+  almindelig tildeling i selve preload-scriptet, fordi `contextIsolation`
+  giver preloadet sin EGEN isolerede `navigator`, adskilt fra den siden selv
+  læser.
+
+**Verificeret delvist, ikke fuldt ud konkluderende**: headerrettelsen er
+bekræftet virker live (`Sec-CH-UA` indeholder nu faktisk `"Google Chrome"` —
+set direkte via CDP). Men et gentaget testforsøg MED fixet aktivt sad
+*stadig* fast på samme "verificerer"-side — mens et tidligere testforsøg,
+hvor fixet ved en fejl IKKE blev ramt (navigerede ved en fejl toolbar'ens
+eget `webContents` i stedet for en rigtig fane), **kom hele vejen igennem**
+til den rigtige login-side. Det peger på mindst to confoundere der ikke kan
+udelukkes herfra:
+1. **Denne sandkasse har ingen rigtig GPU** (`No available adapters` i
+   konsollen ved WebGPU-forsøg, bekræftet live) — kan i sig selv gøre
+   fingeraftrykket usædvanligt for Cloudflare, uafhængigt af UA/Client
+   Hints, og er sandsynligvis IKKE til stede på brugerens rigtige PC.
+2. **Gentagne automatiserede testforsøg fra samme IP på kort tid** kan i sig
+   selv have opbygget en dårligere omdømme-score hos Cloudflare for selve
+   denne sandkasses IP — adskilt fra noget som helst Woowil-specifikt.
+
+Begge rettelser er reelle, korrekte forbedringer af et ægte, verificeret
+inkonsistent fingeraftryk, og burde hjælpe generelt (Cloudflare Turnstile
+bruges af mange sites, ikke kun itch.io) — men **kan ikke fra denne sandkasse
+bekræftes som den FULDE løsning på brugerens konkrete oplevelse**. Bed
+brugeren prøve login på itch.io igen på deres egen maskine efter denne
+opdatering, og sig til hvis den stadig sidder fast.
 
 ## Ting brugeren bevidst har fravalgt/udskudt
 

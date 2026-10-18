@@ -36,6 +36,7 @@ if (process.platform === 'linux' && !process.argv.includes('--ozone-platform=x11
 const {
   app,
   BaseWindow,
+  BrowserWindow,
   WebContentsView,
   ipcMain,
   Menu,
@@ -45,6 +46,7 @@ const {
   dialog,
   clipboard,
   safeStorage,
+  screen,
 } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -234,6 +236,31 @@ const adBlockCache = new Map(); // profileId -> boolean
 // those tokens even though the underlying Chromium is fully capable. Strip
 // them so the UA matches what a stock Chromium build would send, same
 // approach other Chromium-based browsers (Brave, Vivaldi, Opera) use.
+// Also fixes a second, related fingerprint problem found live against
+// itch.io's login page: Cloudflare's bot-check (Turnstile) never got past
+// "Udfører sikkerhedsverificering" - stuck indefinitely, confirmed via CDP
+// (the widget's own iframe never even got inserted into the DOM after 30s+,
+// not just "slow"). Root cause isolated by comparing navigator.userAgent
+// against navigator.userAgentData: the legacy UA string above is cleaned to
+// look exactly like real Google Chrome ("...Chrome/152.0.7977.130
+// Safari/537.36"), but Electron's separate, structured Client Hints data
+// (navigator.userAgentData.brands, and the Sec-CH-UA/Sec-CH-UA-Full-
+// Version-List request headers sent on every request - confirmed live via
+// CDP Network.requestWillBeSentExtraInfo) honestly reports plain
+// `"Chromium"`, never `"Google Chrome"` - Electron isn't a Google-branded
+// Chrome build and there's no simple switch for this, unlike the legacy UA
+// string. That mismatch (claims to be Chrome in one signal, admits to being
+// "just Chromium" in another, machine-checkable one) is exactly the kind of
+// inconsistency bot-detection vendors like Cloudflare are built to catch -
+// worse than honestly identifying as a different browser (Brave/Vivaldi/
+// Edge all pass fine with their OWN consistent brand). Since this project
+// already committed to presenting as Chrome in the legacy UA (to fix
+// Hetzner's "browser not supported" banner above) and reverting that would
+// reintroduce an already-fixed problem, the consistent fix is to finish the
+// job: make Client Hints agree with it, on BOTH sides that matter -
+// outgoing request headers (here) and the page-visible
+// `navigator.userAgentData` object (`pages-preload.js`, same Chrome version
+// parsed from the same cleaned UA string).
 const userAgentHandledPartitions = new Set();
 function ensureUserAgentHandled(partition) {
   if (userAgentHandledPartitions.has(partition)) {
@@ -245,6 +272,25 @@ function ensureUserAgentHandled(partition) {
     .replace(/\s*Woowil\/\S+/i, '')
     .replace(/\s*Electron\/\S+/i, '');
   ses.setUserAgent(cleanUA);
+
+  const chromeVersionMatch = cleanUA.match(/Chrome\/(\S+)/);
+  const chromeFullVersion = chromeVersionMatch ? chromeVersionMatch[1] : null;
+  const chromeMajorVersion = chromeFullVersion ? chromeFullVersion.split('.')[0] : null;
+  if (!chromeMajorVersion) {
+    return;
+  }
+  ses.webRequest.onBeforeSendHeaders({ urls: ['<all_urls>'] }, (details, callback) => {
+    const headers = details.requestHeaders;
+    for (const name of Object.keys(headers)) {
+      const lower = name.toLowerCase();
+      if (lower === 'sec-ch-ua' && !headers[name].includes('"Google Chrome"')) {
+        headers[name] = `${headers[name]}, "Google Chrome";v="${chromeMajorVersion}"`;
+      } else if (lower === 'sec-ch-ua-full-version-list' && !headers[name].includes('"Google Chrome"')) {
+        headers[name] = `${headers[name]}, "Google Chrome";v="${chromeFullVersion}"`;
+      }
+    }
+    callback({ requestHeaders: headers });
+  });
 }
 
 function ensureAdBlockHandled(partition, profileId, store) {
@@ -584,6 +630,137 @@ const tabContextMap = new Map();
 function ctxFor(event) {
   return windowContexts.get(event.sender.id);
 }
+
+// --- Cross-window/cross-screen tab dragging ------------------------------
+//
+// Three things reported together by the project owner: dragging a tab out
+// always lands the new window on the built-in display regardless of where
+// it was dropped; a tab can't be dragged into an already-open Woowil
+// window; and the drag itself has no visible feedback (Chrome shows a
+// small floating tab thumbnail that follows the cursor).
+//
+// All three share one root cause and one fix: HTML5 drag-and-drop
+// (tabstrip.js's existing reorder/tear-off gestures) only ever gives the
+// renderer DOM events while the cursor stays over SOME Chromium-rendered
+// surface - once it leaves the source window's bounds (onto the desktop,
+// another monitor, or another Woowil window entirely), the renderer gets
+// nothing else until `dragend` fires back in the ORIGINAL window, with no
+// coordinates and no way to know where the drop actually happened. A
+// single global drag session here, driven by polling
+// screen.getCursorScreenPoint() in the main process instead (which works
+// regardless of which window/screen/app the cursor is currently over),
+// solves all three at once: the polled position drives a small always-on-
+// top preview window (visible feedback, every tick), and the FINAL polled
+// position at drop time decides whether to open a new window on the
+// correct display or merge the tab into whichever other Woowil window the
+// cursor was over.
+let dragSession = null;
+
+function createDragPreviewWindow(title) {
+  const preview = new BrowserWindow({
+    width: 240,
+    height: 36,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    hasShadow: true,
+    resizable: false,
+    movable: false,
+    show: false,
+  });
+  // Purely visual - never let this overlay steal the drop from whatever's
+  // actually underneath it (the real tabstrip, another window, the OS).
+  preview.setIgnoreMouseEvents(true);
+  const safeTitle = String(title || 'Ny fane')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  preview.loadURL(
+    'data:text/html,' +
+      encodeURIComponent(`<!doctype html><html><body style="margin:0;padding:0;">
+      <div style="box-sizing:border-box;width:240px;height:36px;display:flex;align-items:center;
+        padding:0 12px;border-radius:8px;background:rgba(32,33,36,0.92);color:#fff;
+        font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeTitle}</div>
+      </body></html>`)
+  );
+  return preview;
+}
+
+function startTabDrag(sourceCtx, tabId, title) {
+  cancelTabDrag();
+  const preview = createDragPreviewWindow(title);
+  const point = screen.getCursorScreenPoint();
+  preview.setPosition(point.x + 16, point.y + 16);
+  preview.showInactive();
+  dragSession = {
+    sourceCtx,
+    tabId,
+    preview,
+    timer: setInterval(() => {
+      const p = screen.getCursorScreenPoint();
+      preview.setPosition(p.x + 16, p.y + 16);
+    }, 16),
+  };
+}
+
+function cancelTabDrag() {
+  if (!dragSession) return;
+  clearInterval(dragSession.timer);
+  if (!dragSession.preview.isDestroyed()) {
+    dragSession.preview.destroy();
+  }
+  dragSession = null;
+}
+
+// Called when the native HTML5 drag ends outside the tabstrip's own drop
+// zone (tabstrip.js already distinguishes this from an in-strip reorder via
+// dropEffect, same as before this feature existed) - decides between
+// merging into another open window and opening a brand-new one on the
+// right display, using the drag session's last polled cursor position.
+function finishTabDrag(sourceCtx, tabId) {
+  if (!dragSession || dragSession.tabId !== tabId) {
+    cancelTabDrag();
+    return;
+  }
+  const point = screen.getCursorScreenPoint();
+  cancelTabDrag();
+
+  const tab = sourceCtx.getTabForDrag(tabId);
+  if (!tab) return;
+
+  // Never offer a window as a merge target across the incognito/regular
+  // boundary - same privacy expectation as Chrome refusing to let you
+  // combine those windows at all.
+  for (const otherCtx of windowContexts.values()) {
+    if (otherCtx === sourceCtx || otherCtx.incognito !== sourceCtx.incognito) continue;
+    const b = otherCtx.win.getBounds();
+    if (point.x >= b.x && point.x < b.x + b.width && point.y >= b.y && point.y < b.y + b.height) {
+      otherCtx.adoptTab(tab.url);
+      // Goes through closeTab directly, NOT detachTabToWindow -
+      // detachTabToWindow refuses to pull out a window's only tab (it
+      // assumes that means "just move the window", true for the plain
+      // new-window path below but wrong here: merging a window's last tab
+      // into another one is a real, meaningful move, and closeTab()
+      // already closes the now-empty source window on its own, same as
+      // closing that last tab any other way.
+      sourceCtx.closeTab(tabId);
+      return;
+    }
+  }
+
+  const display = screen.getDisplayNearestPoint(point);
+  const work = display.workArea;
+  const width = 1024;
+  const height = 720;
+  const position = {
+    x: Math.min(Math.max(point.x - width / 2, work.x), work.x + work.width - width),
+    y: Math.min(Math.max(point.y - 24, work.y), work.y + work.height - height),
+  };
+  sourceCtx.detachTabToWindow(tabId, { position });
+}
 function tabCtxFor(event) {
   return tabContextMap.get(event.sender.id);
 }
@@ -624,6 +801,12 @@ function createWindow(store, opts = {}) {
   const win = new BaseWindow({
     width: 1024,
     height: 720,
+    // Dragging a tab out onto a specific monitor (see tabDragEnd below)
+    // provides an explicit top-left so the new window lands on the display
+    // it was dropped on, instead of wherever the window manager's own
+    // default placement happens to be (always the primary/built-in display
+    // in practice - the original complaint this fixes).
+    ...(opts.position ? { x: opts.position.x, y: opts.position.y } : {}),
     title: incognito ? 'Woowil (privat)' : 'Woowil',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
   });
@@ -1770,16 +1953,24 @@ function createWindow(store, opts = {}) {
   }
 
   // Dragging a tab out of the strip entirely - opens it in a brand-new
-  // window instead. This re-navigates to the same URL in a fresh tab
-  // rather than moving the live WebContentsView across windows: every
-  // per-tab event listener (did-navigate, context-menu, setWindowOpenHandler,
-  // ...) set up in createTab() closes over THIS window's own toolbar/tabs/
-  // activeTabId, so simply reparenting the view would leave it silently
-  // wired to the wrong window. Reusing closeTab()+createWindow() (both
-  // already proven, unlike a from-scratch view-transplant) is the safe
-  // trade-off - costs the page's in-memory JS state and forward/back
-  // history, which a real re-navigation always does anyway.
-  function detachTabToWindow(id) {
+  // window instead (or, with opts.suppressNewWindow, just removes it here -
+  // used when finishTabDrag already adopted it into another open Woowil
+  // window instead; see that function). This re-navigates to the same URL
+  // in a fresh tab rather than moving the live WebContentsView across
+  // windows: every per-tab event listener (did-navigate, context-menu,
+  // setWindowOpenHandler, ...) set up in createTab() closes over THIS
+  // window's own toolbar/tabs/activeTabId, so simply reparenting the view
+  // would leave it silently wired to the wrong window. Reusing
+  // closeTab()+createWindow() (both already proven, unlike a from-scratch
+  // view-transplant) is the safe trade-off - costs the page's in-memory JS
+  // state and forward/back history, which a real re-navigation always does
+  // anyway. opts.position (see finishTabDrag) places the new window on
+  // whichever display the tab was actually dropped on, instead of
+  // wherever the window manager's own default placement lands it. Only for
+  // the "open a new window" path - merging into an already-open window
+  // goes through closeTab() directly instead (see finishTabDrag), since
+  // the "don't bother if it's the only tab" guard below doesn't apply there.
+  function detachTabToWindow(id, opts = {}) {
     if (tabs.length <= 1) {
       // Nothing to pull out into a second window - dragging the sole tab
       // of a window "out" would just mean moving the window itself.
@@ -1789,7 +1980,25 @@ function createWindow(store, opts = {}) {
     if (!tab) return;
     const url = tab.view.webContents.getURL();
     closeTab(id);
-    createWindow(store, { startupUrl: url });
+    createWindow(store, { startupUrl: url, position: opts.position });
+  }
+
+  // Used only by finishTabDrag (main.js module scope) to read a tab's URL
+  // at drop time without reaching into this window's private tabs[]
+  // directly from outside.
+  function getTabForDrag(id) {
+    const tab = tabs.find((t) => t.id === id);
+    return tab ? { url: tab.view.webContents.getURL() } : null;
+  }
+
+  // Drop target for another window's drag-merge (see finishTabDrag) -
+  // opens the dragged URL here and brings this window to the front so the
+  // tab visibly lands where it was dropped.
+  function adoptTab(url) {
+    if (win.isMinimized()) { win.restore(); }
+    win.show();
+    win.focus();
+    createTab(url, activeWorkspaceId);
   }
 
   function reopenClosedTab() {
@@ -2303,6 +2512,9 @@ function createWindow(store, opts = {}) {
     closeTab,
     reorderTab,
     detachTabToWindow,
+    getTabForDrag,
+    adoptTab,
+    incognito,
     reopenClosedTab,
     duplicateTab: duplicateTabAction,
     closeOtherTabs: closeOtherTabsAction,
@@ -2455,7 +2667,22 @@ function registerIpcHandlers(store) {
   ipcMain.on('woowil:switch-tab', (event, id) => ctxFor(event)?.switchTab(id));
   ipcMain.on('woowil:close-tab', (event, id) => ctxFor(event)?.closeTab(id));
   ipcMain.on('woowil:reorder-tab', (event, id, targetIndex) => ctxFor(event)?.reorderTab(id, targetIndex));
-  ipcMain.on('woowil:detach-tab', (event, id) => ctxFor(event)?.detachTabToWindow(id));
+  ipcMain.on('woowil:tab-drag-start', (event, id, title) => {
+    const sourceCtx = ctxFor(event);
+    if (sourceCtx) startTabDrag(sourceCtx, id, title);
+  });
+  ipcMain.on('woowil:tab-drag-end', (event, id, wasReordered) => {
+    const sourceCtx = ctxFor(event);
+    if (!sourceCtx) return;
+    // An in-strip reorder already happened entirely client-side
+    // (tabstrip.js's own dragover/drop handlers) - just tear down the
+    // preview window/polling, nothing left to decide here.
+    if (wasReordered) {
+      cancelTabDrag();
+    } else {
+      finishTabDrag(sourceCtx, id);
+    }
+  });
   ipcMain.on('woowil:reopen-closed-tab', (event) => ctxFor(event)?.reopenClosedTab());
   ipcMain.on('woowil:duplicate-tab', (event, id) => ctxFor(event)?.duplicateTab(id));
   ipcMain.on('woowil:close-other-tabs', (event, id) => ctxFor(event)?.closeOtherTabs(id));

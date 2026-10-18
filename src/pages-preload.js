@@ -1,5 +1,49 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Keep navigator.userAgentData consistent with the Chrome-shaped legacy UA
+// string main.js's ensureUserAgentHandled sets (see that function's own
+// comment for the full itch.io/Cloudflare root-cause story - this is the
+// client-side half of that fix; the HTTP Sec-CH-UA headers are the other
+// half). Runs on every regular site (this preload is shared by every tab),
+// not just woowil:// pages. contextBridge.executeInMainWorld (not a plain
+// assignment here) is required - contextIsolation gives this preload its
+// own isolated `navigator`, separate from the one the page's own JS reads,
+// so patching it here would have zero effect on what a site like itch.io
+// actually sees.
+if (location.protocol !== 'woowil:') {
+  const uaMatch = navigator.userAgent.match(/Chrome\/(\S+)/);
+  if (uaMatch) {
+    const fullVersion = uaMatch[1];
+    const majorVersion = fullVersion.split('.')[0];
+    contextBridge.executeInMainWorld({
+      func: (majorVersion, fullVersion) => {
+        if (!navigator.userAgentData) return;
+        const extraBrand = { brand: 'Google Chrome', version: majorVersion };
+        const extraFullBrand = { brand: 'Google Chrome', version: fullVersion };
+        const originalBrands = navigator.userAgentData.brands;
+        const patchedBrands = originalBrands.some((b) => b.brand === 'Google Chrome')
+          ? originalBrands
+          : [...originalBrands, extraBrand];
+        const originalGetHighEntropyValues = navigator.userAgentData.getHighEntropyValues.bind(navigator.userAgentData);
+        const patchedUAData = Object.create(Object.getPrototypeOf(navigator.userAgentData));
+        Object.assign(patchedUAData, navigator.userAgentData);
+        patchedUAData.brands = patchedBrands;
+        patchedUAData.toJSON = () => ({ brands: patchedBrands, mobile: navigator.userAgentData.mobile, platform: navigator.userAgentData.platform });
+        patchedUAData.getHighEntropyValues = async (hints) => {
+          const result = await originalGetHighEntropyValues(hints);
+          if (result.brands) result.brands = patchedBrands;
+          if (result.fullVersionList && !result.fullVersionList.some((b) => b.brand === 'Google Chrome')) {
+            result.fullVersionList = [...result.fullVersionList, extraFullBrand];
+          }
+          return result;
+        };
+        Object.defineProperty(navigator, 'userAgentData', { value: patchedUAData, configurable: true, enumerable: true });
+      },
+      args: [majorVersion, fullVersion],
+    });
+  }
+}
+
 // --- Password manager: login-form detection + autofill, every regular
 // site (not woowil:// pages) ---
 //

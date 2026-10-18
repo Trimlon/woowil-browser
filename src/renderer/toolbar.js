@@ -206,8 +206,18 @@ window.woowil.onTabs((tabs) => {
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData('text/plain', String(tab.id));
       el.classList.add('dragging');
+      // Starts the main process's own cursor-position-driven drag session
+      // (a small floating preview window that follows the cursor
+      // everywhere, including outside this window/off this screen entirely
+      // - native HTML5 drag images don't reliably render across window/
+      // screen boundaries here, confirmed live). Also what lets dragend
+      // below land the tab on the right monitor or merge it into another
+      // open Woowil window, since the main process - not this renderer -
+      // is the only thing that can still see the cursor once it leaves
+      // this window's bounds.
+      window.woowil.tabDragStart(tab.id, tab.title);
     });
-    el.addEventListener('dragend', () => {
+    el.addEventListener('dragend', (event) => {
       el.classList.remove('dragging');
       // The tabstrip's own dragover handler below is the only place that
       // ever sets dropEffect to 'move' - if it never fired (the tab was
@@ -215,8 +225,9 @@ window.woowil.onTabs((tabs) => {
       // page or out of the window), dropEffect stays at its default
       // 'none'. Same gesture real browsers use to tear a tab into its own
       // window.
-      if (draggedTabId !== null && event.dataTransfer.dropEffect !== 'move') {
-        window.woowil.detachTab(draggedTabId);
+      const wasReordered = event.dataTransfer.dropEffect === 'move';
+      if (draggedTabId !== null) {
+        window.woowil.tabDragEnd(draggedTabId, wasReordered);
       }
       draggedTabId = null;
     });
