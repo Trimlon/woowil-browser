@@ -752,6 +752,56 @@ dette blev opdaget og ryddet op (`pkill -9 -f <user-data-dir>` i stedet for
 `child.kill()` i test-scriptet fremover) - ikke en fejl i selve appen, kun i
 testriggen, men værd at huske til senere CDP-baserede tests i dette repo.
 
+### Opfølgning: fletning ind i et andet vindue virkede ikke på rigtig PC
+
+Rapporteret direkte af brugeren umiddelbart efter v0.4.6: "Jeg kan ikke
+trække en fane tilbage i en åben browser." Præciseret via opfølgende
+spørgsmål: fanen "hopper tilbage i sit eget vindue, eller åbner på en ny
+skærm hvis [det andet] vindue er på en anden skærm end hvor jeg trækker den
+fra" - dvs. fletnings-forgreningen i `finishTabDrag` ramte ALDRIG, og faldt
+hver gang igennem til "åbn nyt vindue"-stien (som i sig selv ramte den
+rigtige skærm korrekt, bare uden at flette).
+
+**Kunne ikke reproducere direkte** - denne sandkasse kan, som tidligere
+noteret, ikke simulere et ægte, museknap-holdt HTML5-drag der krydser fra ét
+rigtigt OS-vindue til et andet (kun det CDP-drevne IPC-genvejstest fra
+v0.4.6's egen verifikation, som aldrig rørte den ægte browser-/OS-niveau
+drag-håndtering). Mest sandsynlige root cause, ræsonneret ud fra hvordan
+`dragend` opfører sig én gang det native OS-drag (XDND, pga. den tvungne
+X11-ozone-backend) overtager fra almindelige DOM-events: selve `dragend`s
+timing, når musen rent faktisk forlader kildevinduet, er ikke nødvendigvis
+præcist synkroniseret med det ægte museknap-slip-øjeblik over målvinduet -
+en enkelt `screen.getCursorScreenPoint()`-læsning PRÆCIS når `dragend` fyrer
+kan derfor nemt ramme en position der endnu ikke er over mål-vinduet, eller
+en anelse forkert, hver gang.
+
+**Fix, defensiv frem for en enkelt sikker rettelse** (da selve timing-teorien
+ikke kunne bekræftes direkte her):
+- Ny delt `windowAtPoint(point, sourceCtx)` (brugt begge steder nu) sporer
+  nu KONTINUERLIGT, i samme 16ms-polling der allerede flytter preview-
+  vinduet, hvilket vindue (hvis noget) musen er over lige nu
+  (`dragSession.lastHoveredCtx`). `finishTabDrag` foretrækker denne senest
+  kendte værdi frem for kun at læse én gang helt til sidst - fanger dermed
+  et musetræk der reelt VAR over mål-vinduet et splitsekund før selve
+  `dragend` fyrer, selvom den allersidste læsning skulle vise sig at være
+  en anelse for tidlig/sent.
+- `windowAtPoint` fik desuden en 24px margin udenfor hvert vindues egne
+  `getBounds()` - endnu et hedge, denne gang mod at `getBounds()` ikke
+  nødvendigvis stemmer 1:1 med vindueshåndteringens EGEN dekorerede ramme
+  på alle Linux-desktopmiljøer, og folk naturligt sigter efter kanten/toppen
+  af et vindue (hvor en rigtig fanestrimmel sidder), ikke dets midte.
+
+**Stadig ikke verificeret live mod et ægte museklik-drevet tværvindue-drag**
+(samme begrænsning som hele resten af denne feature i v0.4.6 - se ovenfor).
+Kørte den eksisterende synteset-/IPC-baserede regressionstest igen efter
+denne ændring for at bekræfte selve omlægningen ikke havde ødelagt noget
+(fletning virkede stadig korrekt, ingen tredje vindue, ingen krasch) - men
+det tester ikke den egentlige, formodede timing-race, som kun kan bekræftes
+af brugeren selv på deres rigtige maskine. **Bed brugeren prøve igen efter
+denne opdatering, og hvis den STADIG fejler, bed om præcis hvor på
+mål-vinduet de slipper fanen** (midt i/nær en kant) for at indsnævre det
+yderligere.
+
 ## Sikkerhedsfund fra en review (rettet)
 
 Tre reelle, ikke-teoretiske huller fundet ved en sikkerhedsgennemgang af

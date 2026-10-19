@@ -689,6 +689,31 @@ function createDragPreviewWindow(title) {
   return preview;
 }
 
+// Which open window (if any, excluding the drag's own source) the given
+// screen point currently falls within - shared by the live polling tick
+// below and finishTabDrag's own final check. A small outward margin hedges
+// against win.getBounds() not perfectly matching the window manager's own
+// decorated frame on every Linux desktop - better to occasionally treat a
+// drop just outside a window's real edge as "onto it" than to silently
+// miss real drops near an edge (the common, natural place to aim for,
+// mirroring where a real tabstrip sits).
+const WINDOW_HIT_MARGIN = 24;
+function windowAtPoint(point, sourceCtx) {
+  for (const otherCtx of windowContexts.values()) {
+    if (otherCtx === sourceCtx || otherCtx.incognito !== sourceCtx.incognito) continue;
+    const b = otherCtx.win.getBounds();
+    if (
+      point.x >= b.x - WINDOW_HIT_MARGIN &&
+      point.x < b.x + b.width + WINDOW_HIT_MARGIN &&
+      point.y >= b.y - WINDOW_HIT_MARGIN &&
+      point.y < b.y + b.height + WINDOW_HIT_MARGIN
+    ) {
+      return otherCtx;
+    }
+  }
+  return null;
+}
+
 function startTabDrag(sourceCtx, tabId, title) {
   cancelTabDrag();
   const preview = createDragPreviewWindow(title);
@@ -699,9 +724,25 @@ function startTabDrag(sourceCtx, tabId, title) {
     sourceCtx,
     tabId,
     preview,
+    // Continuously tracks which window the cursor is over, not just
+    // whatever finishTabDrag reads at the very end - the native OS-level
+    // drag handoff once the cursor leaves this app's source window (XDND
+    // on the X11 backend this project forces, see the top of this file)
+    // means `dragend`'s own timing relative to the true mouse-up moment
+    // isn't fully in this app's control. Found live: dropping onto another
+    // open Woowil window consistently missed the merge and fell through to
+    // "open a new window" instead - most likely explanation is a stale or
+    // slightly early cursor read right at drop time. Keeping the LAST
+    // confirmed hover target from this ongoing poll (same 16ms cadence the
+    // preview already uses) and preferring it in finishTabDrag is a
+    // pragmatic hedge against that race, verifiable or not from this
+    // sandbox (real native cross-window drag-and-drop can't be simulated
+    // here - see this project's own notes on that elsewhere in CLAUDE.md).
+    lastHoveredCtx: null,
     timer: setInterval(() => {
       const p = screen.getCursorScreenPoint();
       preview.setPosition(p.x + 16, p.y + 16);
+      dragSession.lastHoveredCtx = windowAtPoint(p, sourceCtx);
     }, 16),
   };
 }
@@ -726,29 +767,28 @@ function finishTabDrag(sourceCtx, tabId) {
     return;
   }
   const point = screen.getCursorScreenPoint();
+  // Prefer the continuously-tracked hover target (see startTabDrag's own
+  // comment on why a single read right here can race the native OS drag
+  // handoff) - fall back to a fresh bounds check against this exact point
+  // only if the poll never caught it hovering over anything.
+  const trackedHover = dragSession.lastHoveredCtx;
   cancelTabDrag();
 
   const tab = sourceCtx.getTabForDrag(tabId);
   if (!tab) return;
 
-  // Never offer a window as a merge target across the incognito/regular
-  // boundary - same privacy expectation as Chrome refusing to let you
-  // combine those windows at all.
-  for (const otherCtx of windowContexts.values()) {
-    if (otherCtx === sourceCtx || otherCtx.incognito !== sourceCtx.incognito) continue;
-    const b = otherCtx.win.getBounds();
-    if (point.x >= b.x && point.x < b.x + b.width && point.y >= b.y && point.y < b.y + b.height) {
-      otherCtx.adoptTab(tab.url);
-      // Goes through closeTab directly, NOT detachTabToWindow -
-      // detachTabToWindow refuses to pull out a window's only tab (it
-      // assumes that means "just move the window", true for the plain
-      // new-window path below but wrong here: merging a window's last tab
-      // into another one is a real, meaningful move, and closeTab()
-      // already closes the now-empty source window on its own, same as
-      // closing that last tab any other way.
-      sourceCtx.closeTab(tabId);
-      return;
-    }
+  const mergeTarget = trackedHover || windowAtPoint(point, sourceCtx);
+  if (mergeTarget) {
+    mergeTarget.adoptTab(tab.url);
+    // Goes through closeTab directly, NOT detachTabToWindow -
+    // detachTabToWindow refuses to pull out a window's only tab (it
+    // assumes that means "just move the window", true for the plain
+    // new-window path below but wrong here: merging a window's last tab
+    // into another one is a real, meaningful move, and closeTab()
+    // already closes the now-empty source window on its own, same as
+    // closing that last tab any other way.
+    sourceCtx.closeTab(tabId);
+    return;
   }
 
   const display = screen.getDisplayNearestPoint(point);
